@@ -5,6 +5,7 @@
 #include "../include/matrix.h"
 #include "../include/test.h"
 
+using namespace shr_mat;
 using namespace std;
 
 template<int size>
@@ -39,6 +40,9 @@ struct iterable_wrapper {
 // step iterator tests
 
 struct si_fixture {
+    template<typename IterType, size_t Step>
+    using step_iterator = shr_mat::detail::step_iterator<IterType, Step>;
+
     static constexpr int step = 3;
     static constexpr int size = 10;
     static constexpr int max_val = step * (size - 1);
@@ -79,6 +83,9 @@ def_test_case_with_fixture(si_const_assignment, si_fixture)
 // vector reference tests
 
 struct vr_fixture {
+    template<typename IterType, size_t Step>
+    using step_iterator = shr_mat::detail::step_iterator<IterType, Step>;
+
     static constexpr int step = 3;
     static constexpr int size = 10;
     static constexpr int max_val = step * (size - 1);
@@ -178,6 +185,9 @@ def_test_case_with_fixture(vr_modify_origin, vr_fixture)
 
     org_vr /= 3;
     assert_true(org_vr == div_list);
+
+    org_vr = expected;
+    assert_true(org_vr == exp_vr);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -225,32 +235,50 @@ def_test_case_with_fixture(mat_subscript, mat_fixture) {
     assert_true(sqr.at(0, 3) == 18);
     assert_true(sqr.row(0)[3] == 18);
     assert_true(sqr.col(3)[0] == 18);
-    assert_true(sqr.row(0) * sqr.col(3) == 761);
+
+    assert_true(sqr.row(3) * sqr.col(0) == 1126);
 }
 
 def_test_case_with_fixture(mat_multiply, mat_fixture) {
     assert_true(nsqr * sqr == mat34({
-            1004, 478, 586, 842,
-            1297, 774, 661, 1057,
-            1308, 837, 636, 1025,
-        }));
+        1319,        598,        691,       1127,
+        1465,        838,        717,       1209,
+        1938,       1077,        846,       1595,
+    }));
 
     assert_true(sqr2 * sqr == mat4({
-            1004, 478, 586, 842,
-            1297, 774, 661, 1057,
-            1308, 837, 636, 1025,
-            727,  479, 332, 664,
-        }));
+        1319,        598,        691,       1127,
+        1465,        838,        717,       1209,
+        1938,       1077,        846,       1595,
+        1126,        631,        465,       1025,
+    }));
 
     sqr2 *= sqr;
     assert_true(sqr2 == mat4({
-            1004, 478, 586, 842,
-            1297, 774, 661, 1057,
-            1308, 837, 636, 1025,
-            727,  479, 332, 664,
-        }));
+        1319,        598,        691,       1127,
+        1465,        838,        717,       1209,
+        1938,       1077,        846,       1595,
+        1126,        631,        465,       1025,
+    }));
 }
 
+def_test_case_with_fixture(mat_vector_modify_origin, mat_fixture) {
+    sqr2[1] -= sqr2[0] * 4;
+    sqr2[2] += -sqr2[0] * (29. / 6);
+    sqr2[3] -= sqr2[0] * (21. / 6);
+
+    for(size_t i = 1; i < 4; i++)
+        assert_float_equal(sqr2[i][0], 0);
+}
+
+def_test_case_with_fixture(mat_vector_operations, mat_fixture) {
+    assert_float_equal(det(sqr), 18564);
+    assert_float_equal(det(sqr2), -141055);
+    assert_true(det(matrix<long long, 4, 4>(sqr)) == 18564);
+
+    assert_float_equal(norm(col), sqrt(941));
+    assert_float_equal(norm(sqr.col(0)), sqrt(1943));
+}
 
 int main()
 {

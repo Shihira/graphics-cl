@@ -12,11 +12,9 @@
 #include <functional>
 #include <initializer_list>
 
-/*
 namespace shr_mat {
 
 namespace detail {
-*/
 
 #define SELF (*(this->self))
 
@@ -233,8 +231,8 @@ struct vector_ref :
         return *this == vt_vector_ref(v.begin(), v.end());
     }
 
-    template<typename AnyIter>
-    vector_type operator+(const vector_ref<AnyIter, vector_type>& v) const {
+    template<typename Iterable>
+    vector_type operator+(const Iterable& v) const {
         vector_type r;
 
         auto s_iter = begin();
@@ -248,8 +246,8 @@ struct vector_ref :
         return r;
     }
 
-    template<typename AnyIter>
-    vector_type operator-(const vector_ref<AnyIter, vector_type>& v) const {
+    template<typename Iterable>
+    vector_type operator-(const Iterable& v) const {
         vector_type r;
 
         auto s_iter = begin();
@@ -261,6 +259,10 @@ struct vector_ref :
             *r_iter = *s_iter - *v_iter;
 
         return r;
+    }
+
+    vector_type operator-() const {
+        return operator*(-1);
     }
 
     template<typename Numeric> typename std::enable_if<
@@ -277,13 +279,10 @@ struct vector_ref :
         return r;
     }
 
-    /*
-     * Any vectors are allowed in multiplication, because matrix mult isn't
-     * symmetrical, not like plus and substraction.
-     */
-    template<typename AnyIter, typename AnyVec>
-    typename vector_type::value_type
-    operator*(const vector_ref<AnyIter, AnyVec>& v) const {
+    template<typename Iterable> typename std::enable_if<
+        !std::is_arithmetic<Iterable>::value,
+        typename vector_type::value_type>::type
+    operator*(const Iterable& v) const {
         typename vector_type::value_type result = 0;
 
         auto s_iter = begin();
@@ -418,6 +417,8 @@ public:
         { std::copy(l.begin(), l.end(), begin()); }
     matrix(const matrix& m) :
         decorator_base<matrix>(this), data_(m.data_) { }
+    template<typename OtherT> matrix(const matrix<OtherT, M, N>& m) :
+        decorator_base<matrix>(this) { std::copy(m.begin(), m.end(), begin()); }
     matrix(matrix&& m) :
         decorator_base<matrix>(this), data_(std::move(m.data_)) { }
 
@@ -455,11 +456,20 @@ public:
         return mat;
     }
 
-    matrix operator-(const matrix& m) const { return operator+(m * -1); }
+    matrix operator-(const matrix& m) const { return operator+(-m); }
+    matrix operator-() const { return operator*(-1); }
 
     template<typename Numeric> typename std::enable_if<
         std::is_arithmetic<Numeric>::value, matrix>::type
-    operator/(Numeric n) const { return operator*(1.0 / n); }
+    operator/(Numeric n) const {
+        matrix result;
+
+        auto dst_i = result.begin(), src_i = begin();
+        for(; dst_i != result.end() && src_i != end(); ++dst_i, ++src_i)
+            *dst_i = *src_i / n;
+
+        return result;
+    }
 
     iterator begin() { return data_.begin(); }
     iterator end() { return data_.end(); }
@@ -490,14 +500,14 @@ public:
     col_ref col(size_t i) {
         return col_ref(
                 typename col_ref::iterator(begin() + i),
-                typename col_ref::iterator(end() + i - cols)
+                typename col_ref::iterator(end() + i)
             );
     }
 
     const_col_ref col(size_t i) const {
         return const_col_ref(
                 typename const_col_ref::iterator(begin() + i),
-                typename const_col_ref::iterator(end() + i - cols)
+                typename const_col_ref::iterator(end() + i)
             );
     }
 
@@ -525,17 +535,13 @@ public:
     }
 };
 
-/*
 }
 
-template<typename MatrixType, bool IsCol>
-using vector_ref = detail::vector_ref<MatrixType, IsCol>;
+template<typename IterType, typename VecType>
+using vector_ref = detail::vector_ref<IterType, VecType>;
 
 template<typename ValueType, size_t Rows, size_t Cols>
 using matrix = detail::matrix<ValueType, Rows, Cols>;
-
-}
-*/
 
 typedef matrix<double, 4, 4> mat4;
 typedef matrix<double, 3, 3> mat3;
@@ -554,4 +560,53 @@ typedef matrix<double, 1, 4> row4;
 typedef matrix<double, 1, 3> row3;
 typedef matrix<double, 1, 2> row2;
 typedef matrix<double, 1, 1> row1;
+
+template<typename T, size_t M, size_t N>
+typename std::enable_if<M == 1 || N == 1, double>::type
+norm(const matrix<T, M, N>& m) {
+    double result(0);
+    for(const auto& e : m) result += e * e;
+    return std::sqrt(result);
+}
+
+template<typename IterType, typename VecType>
+double norm(const vector_ref<IterType, VecType>& v) {
+    return std::sqrt(v * v);
+}
+
+template<typename T, size_t M, size_t N>
+typename std::enable_if<M == N, T>::type
+det(const matrix<T, M, N>& m_) {
+    matrix<T, M, N> mat = m_;
+
+    T res(1), times(1);
+
+    for(size_t n = 0; n < N; n++) {
+        if(mat.at(n, n) == 0) {
+            for(size_t k = n + 1; k < M; k++)
+                if(mat.at(k, n) != 0) {
+                    mat.row(n) += mat.row(k);
+                    break;
+                }
+            // singular matrix
+            if(mat[n][n] == 0) return 0;
+        }
+
+        T Mnn(mat.at(n, n));
+        res *= Mnn;
+
+        for(size_t m = n + 1; m < M; m++) {
+            T Mmn(mat.at(m, n));
+
+            times *= Mnn;
+            mat.row(m) *= Mnn;
+
+            mat.row(m) -= mat.row(n) * Mmn;
+        }
+    }
+
+    return res / times;
+}
+
+}
 

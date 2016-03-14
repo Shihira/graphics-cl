@@ -57,6 +57,10 @@ test_case::test_cases_;
     ((expr) ? true : (throw test_failure( \
         std::string("bool(") + #expr + ") == false (true expected)")))
 
+#define assert_float_equal(expr1, expr2) \
+    ((abs((expr1) -(expr2)) < 1e-6) ? true : (throw test_failure( \
+        std::string("(") + #expr1 + ") != (" + #expr2 + ")")))
+
 #define assert_false(expr) \
     ((expr) ? (throw test_failure( \
         std::string("bool(") + #expr + ") == true (false expected)")) : false)
