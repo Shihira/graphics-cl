@@ -12,7 +12,7 @@
 #include <functional>
 #include <initializer_list>
 
-namespace shr_mat {
+namespace gcl {
 
 namespace detail {
 
@@ -346,7 +346,7 @@ protected:
 
 
 /*
- * matrix_subscript implements a trick: when Matrix is vector, subscript
+ * matrix_subscript implements a trick: when matrix is vector, subscript
  * operation returns a value instead of a vector reference;
  * **NOTE**: Never use operator[] while implementing matrix algorithms, because
  * it's no more than a tool for clients' convenience and is non-systematic.

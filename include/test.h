@@ -6,10 +6,13 @@
 #include <functional>
 #include <vector>
 #include <iostream>
+#include <sstream>
 
 struct test_failure : std::logic_error {
     test_failure(const std::string& s) : std::logic_error(s) { }
 };
+
+std::stringstream ctest;
 
 struct test_case {
     typedef std::function<void()> test_func_type;
@@ -19,21 +22,39 @@ struct test_case {
     }
 
     static void test_all(bool continue_anyway = false) {
+        std::stringstream all_log;
+        
         for(auto& p : test_cases_) {
             std::cout << "Running " << p.first << " ... ";
+
+            bool passed = true;
+
             try {
                 p.second();
             } catch(const test_failure& e) {
                 std::cout << "\033[1;33mFailed\033[0m: ";
                 std::cout << e.what() << std::endl;
-                if(continue_anyway) continue;
+                passed = false;
             } catch(const std::exception& e) {
                 std::cout << "\033[1;31mError\033[0m: ";
                 std::cout << e.what() << std::endl;
-                if(continue_anyway) continue;
+                passed = false;
             }
-            std::cout << "\033[1;32mPassed\033[0m" << std::endl;
+
+            if(!ctest.str().empty()) {
+                all_log << "\033[1m----- " << p.first << " -----\033[0m\n";
+                all_log << ctest.str(); ctest.str("");
+            }
+
+            if(passed)
+                std::cout << "\033[1;32mPassed\033[0m" << std::endl;
+            else if(!continue_anyway) {
+                std::cout << "\033[1;31mAborted.\033[0m" << std::endl;
+                break;
+            }
         }
+
+        std::cout << all_log.str();
     }
 
 private:

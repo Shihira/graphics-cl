@@ -2,23 +2,16 @@
  * Copyright(C) Shihira Fung, 2016 <fengzhiping@hotmail.com>
  */
 
-#define swap_(t, a, b) { t temp = a; a = b; b = temp; }
+/*
+ * (DEPRECATED)
+ * Use buffer to reduce times of synchronization of atomic operations
+ *
+#define BUFFER_SYNC_TRADEOFF_OPTIMIZATION
+ */
 
-#define interpolate_segment(t, len, begs, ends, nsync, out, outsz) { \
-    t init[nsync]; \
-    t diff[nsync]; \
-    for(size_t i = 0; i < (nsync); ++i) { \
-        init[i] = (begs)[i]; \
-        diff[i] = ((ends)[i] - (begs)[i]) / (float)(len); \
-    } \
-    for(float l = 0; l < (len); ++l) { \
-        size_t old = atomic_add(outsz, nsync); \
-        for(size_t i = 0; i < (nsync); ++i) { \
-            out[old + i] = init[i]; \
-            init[i] += diff[i]; \
-        } \
-    } \
-}
+#pragma OPENCL EXTENSION cl_khr_int64_base_atomics: enable
+
+#define swap_(t, a, b) { t temp = a; a = b; b = temp; }
 
 typedef float4 pos_t;
 typedef float4 inf_t;
@@ -44,11 +37,16 @@ void sort_triangle(
 float4 identity_dim(size_t d)
 {
     switch(d) {
-    case 0: return (float4)(1, 0, 0, 0);
-    case 1: return (float4)(0, 1, 0, 0);
-    case 2: return (float4)(0, 0, 1, 0);
-    case 3: return (float4)(0, 0, 0, 1);
-    default: return (float4)(0);
+    case 0:
+        return (float4)(1, 0, 0, 0);
+    case 1:
+        return (float4)(0, 1, 0, 0);
+    case 2:
+        return (float4)(0, 0, 1, 0);
+    case 3:
+        return (float4)(0, 0, 0, 1);
+    default:
+        return (float4)(0);
     }
 }
 
@@ -60,7 +58,8 @@ void extract_quad(
         global const pos_t triangle[3],
         size_t idx[3],
 
-        inf_t quad_inf[4])
+        inf_t quad_inf[4],
+        inf_t quad_pos[4])
 {
     size_t item_id = get_global_id(0);
 
@@ -73,76 +72,181 @@ void extract_quad(
 
     quad_inf[0] += comp_min;
     quad_inf[3] += comp_max;
+    quad_pos[0] = triangle[idx[0]];
+    quad_pos[3] = triangle[idx[2]];
 
-    float breakpoint =
+    float ratio =
         (triangle[idx[1]].y - triangle[idx[0]].y) /
         (triangle[idx[2]].y - triangle[idx[0]].y);
 
-    if(triangle[idx[2]].x > triangle[idx[1]].x) {
+    pos_t breakpoint = ratio * quad_pos[3] + (1-ratio) * quad_pos[0];
+
+    if(breakpoint.x > triangle[idx[1]].x) {
         quad_inf[1] += comp_mid;
-        quad_inf[2] += breakpoint * comp_max + (1 - breakpoint) * comp_min;
+        quad_inf[2] += ratio * comp_max + (1-ratio) * comp_min;
+        quad_pos[1] = triangle[idx[1]];
+        quad_pos[2] = breakpoint;
     } else {
+        quad_inf[1] += ratio * comp_max + (1-ratio) * comp_min;
         quad_inf[2] += comp_mid;
-        quad_inf[1] += breakpoint * comp_max + (1 - breakpoint) * comp_min;
+        quad_pos[1] = breakpoint;
+        quad_pos[2] = triangle[idx[1]];
     }
+}
+
+#define interpolate_segment(t, len, nsync, begs, ends, f) { \
+    t init[nsync]; \
+    t diff[nsync]; \
+    for(size_t i = 0; i < (nsync); ++i) { \
+        init[i] = (begs)[i]; \
+        diff[i] = ((ends)[i] - (begs)[i]) / (float)(len); \
+    } \
+    for(float l = 0; l < (len); l += 1.f) { \
+        f((init), (nsync)); \
+        for(size_t i = 0; i < (nsync); ++i) \
+            init[i] += diff[i]; \
+    } \
 }
 
 kernel void gen_scanline(
         global pos_t const* vertices,
 
         global inf_t* scan_inf,
+        global pos_t* scan_pos,
         global size_t* output_size)
 {
     size_t item_id = get_global_id(0);
+
     global pos_t const* triangle = vertices + item_id * 3;
 
-    size_t vert_idx[3];
-    sort_triangle(triangle, vert_idx);
-    float y_1 = triangle[vert_idx[1]].y - triangle[vert_idx[0]].y;
-    float y_2 = triangle[vert_idx[2]].y - triangle[vert_idx[1]].y;
+    size_t idx[3];
+    sort_triangle(triangle, idx);
 
-    if(scan_inf == NULL) {
+    inf_t quad_inf[4]; 
+    pos_t quad_pos[4];
+    extract_quad(triangle, idx, quad_inf, quad_pos);
+
+    size_t y_1 = floor(quad_pos[1].y) - floor(quad_pos[0].y);
+    size_t y_2 = floor(quad_pos[3].y) - floor(quad_pos[2].y);
+
+    if(scan_inf == NULL || scan_pos == NULL) {
         atomic_add(output_size, 2 * (y_1 + y_2));
         return;
     }
 
-    inf_t quad_info[4]; 
-    extract_quad(triangle, vert_idx, quad_info);
-    inf_t trap_beg_1[2] = { quad_info[0], quad_info[0] },
-          trap_beg_2[2] = { quad_info[1], quad_info[2] },
-          trap_end_1[2] = { quad_info[1], quad_info[2] },
-          trap_end_2[2] = { quad_info[3], quad_info[3] };
+    float4 beg_1[4] = { quad_inf[0], quad_inf[0], quad_pos[0], quad_pos[0], },
+           end_1[4] = { quad_inf[1], quad_inf[2], quad_pos[1], quad_pos[2], },
+           beg_2[4] = { quad_inf[1], quad_inf[2], quad_pos[1], quad_pos[2], },
+           end_2[4] = { quad_inf[3], quad_inf[3], quad_pos[3], quad_pos[3], };
 
-    interpolate_segment(inf_t, y_1, trap_beg_1, trap_end_1, 2,
-            scan_inf, output_size);
-    interpolate_segment(inf_t, y_2, trap_beg_2, trap_end_2, 2,
-            scan_inf, output_size);
+#ifdef BUFFER_SYNC_TRADEOFF_OPTIMIZATION
+
+#define scanline_move_to_global { \
+    size_t old = atomic_add(output_size, buf_used / 2); \
+    for(size_t buf_i = 0, scan_i = old; \
+            buf_i < buf_used; buf_i += 4, scan_i += 2) { \
+        scan_inf[scan_i + 0] = priv_buf[buf_i + 0]; \
+        scan_inf[scan_i + 1] = priv_buf[buf_i + 1]; \
+        scan_pos[scan_i + 0] = floor(priv_buf[buf_i + 2]); \
+        scan_pos[scan_i + 1] = floor(priv_buf[buf_i + 3]); \
+    } \
+    buf_used = 0; \
+}
+
+#define scanline_interpolate_func(data, sz) { \
+    if(buf_used > 60) \
+        scanline_move_to_global; \
+    for(size_t i = 0; i < 4; i++, buf_used++) \
+        priv_buf[buf_used] = data[i]; \
+}
+
+    size_t buf_used = 0;
+    float4 priv_buf[64];
+
+#else
+
+#define scanline_interpolate_func(data, sz) { \
+    size_t old = atomic_add(output_size, 2); \
+    scan_inf[old + 0] = data[0]; \
+    scan_inf[old + 1] = data[1]; \
+    scan_pos[old + 0] = floor(data[2]); \
+    scan_pos[old + 1] = floor(data[3]); \
+}
+
+#endif
+
+    interpolate_segment(float4, y_1, 4, beg_1, end_1,
+            scanline_interpolate_func);
+    interpolate_segment(float4, y_2, 4, beg_2, end_2,
+            scanline_interpolate_func);
+
+#ifdef BUFFER_SYNC_TRADEOFF_OPTIMIZATION
+    if(buf_used > 0)
+        scanline_move_to_global;
+#endif
 }
 
 kernel void fill_scanline(
-        global pos_t const* vertices,
-        global inf_t const* scanlines,
+        global pos_t const* scan_pos,
+        global inf_t const* scan_inf,
 
+        global pos_t* frag_pos,
         global inf_t* frag_inf,
         global size_t* output_size)
 {
-    size_t item_id = get_global_id(0);
-    global inf_t const* scanline = scanlines + item_id * 2;
-    global pos_t const* triangle = vertices + (size_t)scanline->w * 3;
+    size_t item_id = get_global_id(0),
+           scan_id = item_id * 2;
 
-    pos_t vecl = triangle[0] * scanline[0].x +
-                 triangle[1] * scanline[0].y +
-                 triangle[2] * scanline[0].z;
-    pos_t vecr = triangle[0] * scanline[1].x +
-                 triangle[1] * scanline[1].y +
-                 triangle[2] * scanline[1].z;
+    scan_inf += scan_id;
+    scan_pos += scan_id;
+
+    int len = (int)(scan_pos[1].x) - (int)(scan_pos[0].x);
 
     if(frag_inf == NULL) {
-        atomic_add(output_size, vecr.x - vecl.x);
+        atomic_add(output_size, len);
         return;
     }
 
-    interpolate_segment(inf_t, vecr.x - vecl.x, scanline, scanline + 1, 1,
-            frag_inf, output_size);
+    float4 beg[2] = { scan_pos[0], scan_inf[0] };
+    float4 end[2] = { scan_pos[1], scan_inf[1] };
+
+#ifdef BUFFER_SYNC_TRADEOFF_OPTIMIZATION
+
+#define fragment_move_to_global { \
+    size_t old = atomic_add(output_size, buf_used / 2); \
+    for(size_t buf_i = 0; buf_i < buf_used; buf_i += 2, old++) { \
+        frag_pos[old] = priv_buf[buf_i]; \
+        frag_inf[old] = priv_buf[buf_i + 1]; \
+    } \
+    buf_used = 0; \
+}
+
+#define fragment_interpolate_func(data, sz) { \
+    if(buf_used > 60) \
+        fragment_move_to_global; \
+    priv_buf[buf_used++] = data[0]; \
+    priv_buf[buf_used++] = data[1]; \
+}
+
+    size_t buf_used = 0;
+    float4 priv_buf[64];
+
+#else
+
+#define fragment_interpolate_func(data, sz) { \
+    size_t old = atomic_inc(output_size); \
+    frag_pos[old] = data[0]; \
+    frag_inf[old] = data[1]; \
+}
+
+#endif
+
+    interpolate_segment(float4, len, 2, beg, end,
+            fragment_interpolate_func);
+
+#ifdef BUFFER_SYNC_TRADEOFF_OPTIMIZATION
+    if(buf_used > 0)
+        fragment_move_to_global;
+#endif
 }
 

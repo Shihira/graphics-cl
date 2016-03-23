@@ -5,7 +5,7 @@
 #include "../include/matrix.h"
 #include "../include/test.h"
 
-using namespace shr_mat;
+using namespace gcl;
 using namespace std;
 
 template<int size>
@@ -41,7 +41,7 @@ struct iterable_wrapper {
 
 struct si_fixture {
     template<typename IterType, size_t Step>
-    using step_iterator = shr_mat::detail::step_iterator<IterType, Step>;
+    using step_iterator = gcl::detail::step_iterator<IterType, Step>;
 
     static constexpr int step = 3;
     static constexpr int size = 10;
@@ -84,7 +84,7 @@ def_test_case_with_fixture(si_const_assignment, si_fixture)
 
 struct vr_fixture {
     template<typename IterType, size_t Step>
-    using step_iterator = shr_mat::detail::step_iterator<IterType, Step>;
+    using step_iterator = gcl::detail::step_iterator<IterType, Step>;
 
     static constexpr int step = 3;
     static constexpr int size = 10;
