@@ -280,8 +280,23 @@ def_test_case_with_fixture(mat_vector_operations, mat_fixture) {
     assert_float_equal(norm(sqr.col(0)), sqrt(1943));
 }
 
+def_test_case_with_fixture(mat_print, mat_fixture) {
+    ctest <<
+        nsqr << endl <<
+        sqr << endl <<
+        sqr2 << endl <<
+        row << endl <<
+        col << endl <<
+        nsqr[2] << endl <<
+        sqr2[0] << endl <<
+        sqr.col(3) << endl;
+}
+
 int main()
 {
     test_case::test_all(true);
+    cout << test_case::log().str();
+
+    return test_case::status() ? 0 : -1;
 }
 

@@ -22,8 +22,8 @@ struct test_case {
     }
 
     static void test_all(bool continue_anyway = false) {
-        std::stringstream all_log;
-        
+        test_log_.str("");
+
         for(auto& p : test_cases_) {
             std::cout << "Running " << p.first << " ... ";
 
@@ -41,9 +41,11 @@ struct test_case {
                 passed = false;
             }
 
+            test_status_ &= passed;
+
             if(!ctest.str().empty()) {
-                all_log << "\033[1m----- " << p.first << " -----\033[0m\n";
-                all_log << ctest.str(); ctest.str("");
+                test_log_ << "\033[1m----- " << p.first << " -----\033[0m\n";
+                test_log_ << ctest.str(); ctest.str("");
             }
 
             if(passed)
@@ -53,16 +55,21 @@ struct test_case {
                 break;
             }
         }
-
-        std::cout << all_log.str();
     }
+
+    static std::stringstream& log() { return test_log_; }
+    static bool status() { return test_status_; }
 
 private:
     static std::vector<std::pair<std::string, test_func_type>> test_cases_;
+    static std::stringstream test_log_;
+    static bool test_status_;
 };
 
 std::vector<std::pair<std::string, test_case::test_func_type>> 
 test_case::test_cases_;
+std::stringstream test_case::test_log_;
+bool test_case::test_status_ = true;
 
 #define def_test_case(name) \
     static void name(); \

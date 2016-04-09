@@ -1,3 +1,6 @@
+#ifndef COMPUT_H_INCLUDED
+#define COMPUT_H_INCLUDED
+
 #include "matrix.h"
 
 #define __CL_ENABLE_EXCEPTIONS
@@ -141,19 +144,51 @@ template<> struct type_convertor_<col4, cl_float4> {
     }
 };
 
+template<> struct type_convertor_<cl_float4, row4> {
+    static void assign(row4* t, const cl_float4* f, size_t sz) {
+        row4* tend = t + sz;
+        for(; t != tend; ++t, ++f) {
+            (*t)[0] = f->s[0];
+            (*t)[1] = f->s[1];
+            (*t)[2] = f->s[2];
+            (*t)[3] = f->s[3];
+        }
+    }
+};
+
+template<> struct type_convertor_<row4, cl_float4> {
+    static void assign(cl_float4* t, const row4* f, size_t sz) {
+        cl_float4* tend = t + sz;
+        for(; t != tend; ++t, ++f) {
+            t->s[0] = (*f)[0];
+            t->s[1] = (*f)[1];
+            t->s[2] = (*f)[2];
+            t->s[3] = (*f)[3];
+        }
+    }
+};
+
 template<typename HostType>
 struct default_conversion_ {
     typedef HostType type;
 };
 
-template<>
-struct default_conversion_<col4> {
-    typedef cl_float4 type;
-};
+template<> struct default_conversion_<col4> { typedef cl_float4 type; };
+template<> struct default_conversion_<row4> { typedef cl_float4 type; };
+template<> struct default_conversion_<col3> { typedef cl_float3 type; };
 
 
-////////////////////////////////////////////////////////////////////////////////
-// buffer
+/**
+ * buffer
+ *
+ * gcl::buffer wraps operations including transfer data to and from graphic
+ * card, convert data between wrapped host data type and raw data.
+ *
+ * Lazy allocation policy for buffer, host data and device data, so always use
+ * buf(), host_data() and dev_data() instead of accessing pointers directly.
+ * Furthermore, when HostType and DeviceType are the same type, host_data() is
+ * equivalent, and conversion functions do nothing.
+ */
 
 enum buffer_type {
     host_map = CL_MEM_USE_HOST_PTR,
@@ -162,13 +197,12 @@ enum buffer_type {
 
 template<
     typename HostType,
-    typename DeviceType = typename default_conversion_<HostType>::type,
-    // DeviceType must be a plain type, namely no pointers or vtable is allowed
-    typename Convertor = type_convertor_<HostType, DeviceType>,
-    typename InvConvertor = type_convertor_<DeviceType, HostType> >
+    typename DeviceType = typename default_conversion_<HostType>::type>
 struct buffer {
     typedef HostType host_type;
     typedef DeviceType device_type;
+    typedef type_convertor_<HostType, DeviceType> convertor;
+    typedef type_convertor_<DeviceType, HostType> inv_convertor;
 
     typedef host_type* iterator;
     typedef host_type const* const_iterator;
@@ -178,8 +212,7 @@ struct buffer {
     buffer(const std::initializer_list<host_type>& l,
             buffer_type t = host_map) :
         size_(std::distance(l.begin(), l.end())),
-        bt_(t),
-        host_data_(new host_type[size_])
+        bt_(t)
     {
         std::copy(l.begin(), l.end(), host_data());
     }
@@ -189,10 +222,9 @@ struct buffer {
 
     buffer(size_t count, host_type v, buffer_type t = host_map) :
         size_(count),
-        bt_(t),
-        host_data_(new host_type[size_])
+        bt_(t)
     {
-        std::fill_n(host_data_.get(), size_, v);
+        std::fill_n(host_data(), size_, v);
     }
 
     iterator begin() { return host_data(); }
@@ -216,6 +248,9 @@ struct buffer {
     }
 
     host_type* host_data() {
+        // TODO: use template specialisation instead
+        //if(std::is_same<host_type, device_type>::value)
+        //    return reinterpret_cast<host_type*>(device_data());
         if(!host_data_)
             host_data_ = std::unique_ptr<host_type[]>
                 (new host_type[size()]);
@@ -223,6 +258,8 @@ struct buffer {
     }
 
     host_type const* host_data() const {
+        //if(std::is_same<host_type, device_type>::value)
+        //    return reinterpret_cast<host_type const*>(device_data());
         if(!host_data_)
             host_data_ = std::unique_ptr<host_type[]>
                 (new host_type[size()]);
@@ -244,6 +281,7 @@ struct buffer {
     }
 
     size_t size() const { return size_; }
+    size_t size_in_bytes() const { return sizeof(device_type) * size_; }
     host_type& operator[](size_t idx) { return host_data()[idx]; }
     const host_type& operator[](size_t idx) const { return host_data()[idx]; }
 
@@ -256,7 +294,7 @@ struct buffer {
         return *this;
     }
 
-protected:
+private:
     size_t size_;
     buffer_type bt_;
     mutable std::unique_ptr<host_type[]> host_data_;
@@ -271,13 +309,18 @@ protected:
     friend struct unpull_functor_;
     template<typename T1, typename T2>
     friend struct unpush_functor_;
+    template<typename T1, typename T2>
+    friend struct buffer_behaviours_;
 
+protected:
     void conv_dev_to_host_() {
-        InvConvertor::assign(host_data(), device_data(), size());
+        //if((void*)host_data() == (void*)device_data()) return;
+        inv_convertor::assign(host_data(), device_data(), size());
     }
 
     void conv_host_to_dev_() {
-        Convertor::assign(device_data(), host_data(), size());
+        //if((void*)host_data() == (void*)device_data()) return;
+        convertor::assign(device_data(), host_data(), size());
     }
 };
 
@@ -286,9 +329,13 @@ static cl::Buffer nullptr_buf(NULL);
 struct kernel : cl::Kernel {
     using cl::Kernel::Kernel;
 
-    template<typename T1, typename T2, typename T3, typename T4>
-    cl_int set_buffer(cl_uint index, buffer<T1, T2, T3, T4>& b) {
+    template<typename T1, typename T2>
+    cl_int set_buffer(cl_uint index, buffer<T1, T2>& b) {
         return setArg(index, b.buf());
+    }
+
+    cl_int set_null(cl_uint index) {
+        return setArg(index, nullptr_buf);
     }
 };
 
@@ -334,9 +381,13 @@ struct pull_functor_ {
             const event_set& ev) const {
         event e;
         void* mem = cmdq.enqueueMapBuffer(buf_.buf(), true, CL_MAP_READ, 0,
-                sizeof(DevType) * buf_.size(), &ev, &e);
+                buf_.size_in_bytes(), &ev, &e);
         if(mem != (void*)buf_.device_data())
             throw std::runtime_error("Failed to map buffer using host_ptr");
+        buf_.conv_dev_to_host_();
+        event_set mapped_es{e};
+        cmdq.enqueueUnmapMemObject(buf_.buf(),
+                buf_.device_data(), &mapped_es, &e);
         return e;
     }
 };
@@ -357,8 +408,13 @@ struct push_functor_ {
             const event_set& ev) const {
         event e;
         void* mem = cmdq.enqueueMapBuffer(buf_.buf(), true, CL_MAP_WRITE, 0,
-                sizeof(DevType) * buf_.size(), &ev, &e);
-        assert(mem == (void*)buf_.device_data());
+                buf_.size_in_bytes(), &ev, &e);
+        if(mem != (void*)buf_.device_data())
+            throw std::runtime_error("Failed to map buffer using host_ptr");
+        buf_.conv_host_to_dev_();
+        event_set mapped_es{e};
+        cmdq.enqueueUnmapMemObject(buf_.buf(),
+                buf_.device_data(), &mapped_es, &e);
         return e;
     }
 };
@@ -376,11 +432,7 @@ struct unpull_functor_ {
 
     event operator()(cl::CommandQueue cmdq,
             const event_set& ev) const {
-        event e;
-        buf_.conv_dev_to_host_();
-        cmdq.enqueueUnmapMemObject(buf_.buf(),
-                buf_.device_data(), &ev, &e);
-        return e;
+        return ev.front();
     }
 };
 
@@ -398,17 +450,42 @@ struct unpush_functor_ {
 
     event operator()(cl::CommandQueue cmdq,
             const event_set& ev) const {
-        event e;
-        buf_.conv_host_to_dev_();
-        cmdq.enqueueUnmapMemObject(buf_.buf(),
-                buf_.device_data(), &ev, &e);
-        return e;
+        return ev.front();
     }
 };
 
 template<typename HostType, typename DevType>
 unpush_functor_<HostType, DevType> unpush(buffer<HostType, DevType>& b) {
     return unpush_functor_<HostType, DevType>(b);
+}
+
+
+template<typename HostType, typename DevType>
+struct fill_functor_ {
+    typedef buffer<HostType, DevType> buf_type;
+
+    buf_type& buf_;
+    typename buf_type::device_type pat_;
+
+    fill_functor_(buf_type& b, const typename buf_type::host_type& pat) :
+        buf_(b)
+    {
+        buf_type::convertor::assign(&pat_, &pat, 1);       
+    }
+
+    event operator()(cl::CommandQueue cmdq,
+            const event_set& ev) const {
+        event e;
+        cmdq.enqueueFillBuffer(buf_.buf(), pat_, 0, buf_.size_in_bytes(),
+                &ev, &e);
+        return e;
+    }
+};
+
+template<typename HostType, typename DevType>
+fill_functor_<HostType, DevType> fill(
+        buffer<HostType, DevType>& b, const HostType& d) {
+    return fill_functor_<HostType, DevType>(b, d);
 }
 
 struct run {
@@ -428,12 +505,13 @@ struct run {
         krn_(krn), global_partition_(global_partition) { }
 };
 
-program compile(const std::string& s)
+program compile(const std::string& s,
+    const std::string& options = "")
 {
     program prg(context::current(), s);
 
     try {
-        prg.build();
+        prg.build(options.c_str());
     } catch(cl::Error e) {
         if(e.err() == CL_BUILD_PROGRAM_FAILURE) {
             std::string err_msg = "Compilation Error in ";
@@ -456,17 +534,18 @@ event wait(cl::CommandQueue cmdq,
 
 auto wait_until_done = wait;
 
-program compile(std::istream& f)
+program compile(std::istream& f, const std::string& options = "")
 {
     return compile(std::string(
         std::istreambuf_iterator<char>(f),
-        std::istreambuf_iterator<char>()));
+        std::istreambuf_iterator<char>()), options);
 }
 
-program compile(std::istream&& f)
+program compile(std::istream&& f, const std::string& options = "")
 {
-    return compile(f);
+    return compile(f, options);
 }
 
 }
 
+#endif // COMPUT_H_INCLUDED

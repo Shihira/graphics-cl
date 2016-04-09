@@ -108,12 +108,12 @@ void extract_quad(
     } \
 }
 
-kernel void gen_scanline(
+kernel void mark_scanline(
         global pos_t const* vertices,
 
         global inf_t* scan_inf,
         global pos_t* scan_pos,
-        global size_t* output_size)
+        global uint* output_size)
 {
     size_t item_id = get_global_id(0);
 
@@ -122,15 +122,15 @@ kernel void gen_scanline(
     size_t idx[3];
     sort_triangle(triangle, idx);
 
+    size_t y_1 = floor(triangle[idx[1]].y) - floor(triangle[idx[0]].y);
+    size_t y_2 = floor(triangle[idx[2]].y) - floor(triangle[idx[1]].y);
+
     inf_t quad_inf[4]; 
     pos_t quad_pos[4];
     extract_quad(triangle, idx, quad_inf, quad_pos);
 
-    size_t y_1 = floor(quad_pos[1].y) - floor(quad_pos[0].y);
-    size_t y_2 = floor(quad_pos[3].y) - floor(quad_pos[2].y);
-
     if(scan_inf == NULL || scan_pos == NULL) {
-        atomic_add(output_size, 2 * (y_1 + y_2));
+        atomic_add(output_size, (y_1 + y_2) * 2);
         return;
     }
 
@@ -147,8 +147,10 @@ kernel void gen_scanline(
             buf_i < buf_used; buf_i += 4, scan_i += 2) { \
         scan_inf[scan_i + 0] = priv_buf[buf_i + 0]; \
         scan_inf[scan_i + 1] = priv_buf[buf_i + 1]; \
-        scan_pos[scan_i + 0] = floor(priv_buf[buf_i + 2]); \
-        scan_pos[scan_i + 1] = floor(priv_buf[buf_i + 3]); \
+        scan_pos[scan_i + 0] = round(priv_buf[buf_i + 2]); \
+        scan_pos[scan_i + 0].z = priv_buf[buf_i + 2].z; \
+        scan_pos[scan_i + 1] = round(priv_buf[buf_i + 3]); \
+        scan_pos[scan_i + 1].z = priv_buf[buf_i + 2].z; \
     } \
     buf_used = 0; \
 }
@@ -169,8 +171,10 @@ kernel void gen_scanline(
     size_t old = atomic_add(output_size, 2); \
     scan_inf[old + 0] = data[0]; \
     scan_inf[old + 1] = data[1]; \
-    scan_pos[old + 0] = floor(data[2]); \
-    scan_pos[old + 1] = floor(data[3]); \
+    scan_pos[old + 0] = round(data[2]); \
+    scan_pos[old + 0].z = data[2].z; \
+    scan_pos[old + 1] = round(data[3]); \
+    scan_pos[old + 1].z = data[3].z; \
 }
 
 #endif
@@ -192,7 +196,7 @@ kernel void fill_scanline(
 
         global pos_t* frag_pos,
         global inf_t* frag_inf,
-        global size_t* output_size)
+        global uint* output_size)
 {
     size_t item_id = get_global_id(0),
            scan_id = item_id * 2;

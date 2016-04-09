@@ -30,19 +30,13 @@ int main()
         col4 { 242, 272, 0, 1 },
         col4 { 399, 199, 0, 1 },
     };
-    buffer<col4, cl_float4> buf_colors {
-        col4 { 255, 0, 0, 1 },
-        col4 { 0, 255, 0, 1 },
-        col4 { 0, 0, 255, 1 },
+    buffer<col4, cl_float4> buf_colors(buf_triangles.size(), host_map);
 
-        col4 { 255, 0, 0, 1 },
-        col4 { 0, 255, 0, 1 },
-        col4 { 0, 0, 255, 1 },
-
-        col4 { 255, 0, 0, 1 },
-        col4 { 0, 255, 0, 1 },
-        col4 { 0, 0, 255, 1 },
-    };
+    for(size_t i = 0; i < buf_triangles.size(); i += 3) {
+        buf_colors[i + 0] = col4 { 255, 0, 0, 1 };
+        buf_colors[i + 1] = col4 { 0, 255, 0, 1 };
+        buf_colors[i + 2] = col4 { 0, 0, 255, 1 };
+    }
     buffer<size_t> buf_size { 0 };
 
     size_t w = 1024, h = 768;

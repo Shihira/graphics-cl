@@ -2,6 +2,9 @@
  * Copyright (C) Shihira Fung, 2016 <fengzhiping@hotmail.com>
  */
 
+#ifndef MATRIX_H_INCLUDED
+#define MATRIX_H_INCLUDED
+
 #include <array>
 #include <map>
 #include <cmath>
@@ -321,11 +324,11 @@ struct vector_ref :
         return *this;
     }
 
-    operator vector_type() {
+    operator vector_type() const {
         vector_type v;
         std::copy(begin(), end(), v.begin());
 
-        return *this;
+        return v;
     }
 
     auto operator[](size_t i) -> decltype(*begin()) {
@@ -471,6 +474,9 @@ public:
         return result;
     }
 
+    /*
+     * Row-major order iterator
+     */
     iterator begin() { return data_.begin(); }
     iterator end() { return data_.end(); }
 
@@ -551,15 +557,20 @@ typedef matrix<double, 4, 5> mat45;
 typedef matrix<double, 3, 4> mat34;
 typedef matrix<double, 2, 3> mat23;
 
-typedef matrix<double, 4, 1> col4;
-typedef matrix<double, 3, 1> col3;
-typedef matrix<double, 2, 1> col2;
-typedef matrix<double, 1, 1> col1;
+template<typename T, size_t M>
+using col = matrix<T, M, 1>;
+template<typename T, size_t N>
+using row = matrix<T, 1, N>;
 
-typedef matrix<double, 1, 4> row4;
-typedef matrix<double, 1, 3> row3;
-typedef matrix<double, 1, 2> row2;
-typedef matrix<double, 1, 1> row1;
+typedef col<double, 4> col4;
+typedef col<double, 3> col3;
+typedef col<double, 2> col2;
+typedef col<double, 1> col1;
+
+typedef row<double, 4> row4;
+typedef row<double, 3> row3;
+typedef row<double, 2> row2;
+typedef row<double, 1> row1;
 
 template<typename T, size_t M, size_t N>
 typename std::enable_if<M == 1 || N == 1, double>::type
@@ -608,5 +619,108 @@ det(const matrix<T, M, N>& m_) {
     return res / times;
 }
 
+template<typename T, size_t M, size_t N>
+std::ostream& operator<<(std::ostream& s, const matrix<T, M, N>& mat) {
+    for(size_t m = 0; m < M; m++) {
+        for(size_t n = 0; n < N; n++)
+            s <<
+                (n == 0 ? (m == 0 ? "[ " : "  ") : "") <<
+                mat.at(m, n) <<
+                (n == N - 1 ? (m == M - 1 ? " ]" : ";\n") : ",\t");
+    }
+    return s;
 }
 
+template<typename T, size_t M>
+std::ostream& operator<<(std::ostream& s, const matrix<T, M, 1>& mat) {
+    for(size_t m = 0; m < M; m++) {
+        s <<
+            (m == 0 ? "[ " : "") <<
+            mat.at(m, 0) <<
+            (m == M - 1 ? " ]ᵀ" : ",\t");
+    }
+    return s;
+}
+
+template<typename IterType, typename VecType>
+std::ostream& operator<<(std::ostream& s,
+        const vector_ref<IterType, VecType>& v) {
+    return operator<<(s, VecType(v));
+}
+
+namespace tf {
+
+typedef enum { xOy, yOz, zOx } plane;
+
+template<typename T = double>
+inline matrix<T, 4, 4> diagonal(col<T, 4> diag)
+{
+    return matrix<T, 4, 4> {
+        diag[0], 0, 0, 0,
+        0, diag[1], 0, 0,
+        0, 0, diag[2], 0,
+        0, 0, 0, diag[3],
+    };
+}
+
+inline mat4 rotate(double a, plane p)
+{
+    if(p == xOy)
+        return mat4 {
+            cos(a),-sin(a), 0, 0,
+            sin(a), cos(a), 0, 0,
+            0,      0,      1, 0,
+            0,      0,      0, 1,
+        };
+    else if(p == yOz)
+        return mat4 {
+            1, 0,      0,      0,
+            0, cos(a), sin(a), 0,
+            0,-sin(a), cos(a), 0,
+            0, 0,      0,      1,
+        };
+    else
+        return mat4 {
+            cos(a), 0,-sin(a), 0,
+            0,      1, 0,      0,
+            sin(a), 0, cos(a), 0,
+            0,      0, 0,      1,
+        };
+}
+
+template<typename T = double>
+inline matrix<T, 4, 4> translate(col<T, 4> t)
+{
+    return matrix<T, 4, 4> {
+        t[3], 0,    0,    t[0],
+        0,    t[3], 0,    t[1],
+        0,    0,    t[3], t[2],
+        0,    0,    0,    t[3],
+    };
+}
+
+template<typename T = double>
+inline matrix<T, 4, 4> scale(T x, T y, T z)
+    { return diagonal({x, y, z, 1}); }
+
+template<typename T = double>
+inline matrix<T, 4, 4> identity()
+    { return diagonal({1, 1, 1, 1}); }
+
+inline mat4 perspective(double fov, double wh, double zn, double zf)
+{
+    double f = 1 / tan(fov);
+    double c = zn - zf;
+    return mat4 {
+        f / wh, 0, 0, 0,
+        0, f, 0, 0,
+        0, 0, (zn + zf) / c, 2 * zn * zf / c,
+        0, 0, -1, 0
+    };
+}
+
+}
+
+}
+
+#endif // MATRIX_H_INCLUDED
