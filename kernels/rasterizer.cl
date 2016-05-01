@@ -135,7 +135,7 @@ int is_in_viewport(
 }
 
 kernel void mark_scanline(
-        in      pos_t*  gclPosition,
+        in      pos_t*  InterpPosition,
         in      float*  gclViewport,
         inout   uint*   gclMarkSize,
         inout   uint*   gclFragmentSize,
@@ -145,9 +145,9 @@ kernel void mark_scanline(
     size_t item_id = get_global_id(0) * 3;
 
     pos_t triangle[3] = {
-        gclPosition[item_id],
-        gclPosition[item_id + 1],
-        gclPosition[item_id + 2],
+        InterpPosition[item_id],
+        InterpPosition[item_id + 1],
+        InterpPosition[item_id + 2],
     };
 
     for(int i = 0; i < 3; i++) {
@@ -252,30 +252,10 @@ kernel void depth_test(
         (size_t)gclFragPos->x;
     gclDepthBuffer += coord;
 
-    int integral_z = round(gclFragPos->z * (1 << 24));
+    //int integral_z = round(gclFragPos->z * (1 << 24));
+    float floating_z = gclFragPos->z;
+    int integral_z = *(int*)&floating_z;
 
     atomic_min(gclDepthBuffer, integral_z);
-
-    //barrier(CLK_GLOBAL_MEM_FENCE);
-
-    //atomic_cmpxchg(gclDepthBuffer, integral_z, item_id);
-}
-
-kernel void image_assembly(
-        in      pos_t*  gclFragPos,
-        in      float4* gclFragColor,
-        in      uint*   gclBufferSize,
-        out     float4* gclColorBuffer)
-{
-    size_t item_id = get_global_id(0);
-    gclFragPos += item_id;
-    gclFragColor += item_id;
-
-    size_t coord =
-        (gclBufferSize[BS_HEIGHT] - (size_t)gclFragPos->y - 1) *
-            gclBufferSize[BS_WIDTH] +
-        (size_t)gclFragPos->x;
-
-    gclColorBuffer[coord] = *gclFragColor;
 }
 

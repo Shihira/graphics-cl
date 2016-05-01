@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <string>
+#include <limits>
 
 #include "../include/comput.h"
 
@@ -9,30 +10,34 @@ using namespace std;
 using namespace gcl;
 
 string vert_shader_src = R"EOF(
+void mul_mat4_vec4(global float4* out/*row-major*/, global float4 mat4[4], float4 in)
+{
+    out->x = dot(mat4[0], in);
+    out->y = dot(mat4[1], in);
+    out->z = dot(mat4[2], in);
+    out->w = dot(mat4[3], in);
+}
+
 kernel void vertex_shader(
-    global float4*  gclAbbrVertex,
-    global float3*  gclAbbrNormal,
-    global float4*  gclMatrix, // row-major
-    global float4*  gclPosition,
-    global float3*  gclNormal,
-    global float4*  gclPositionWorld)
+    global float4*  AttributeVertex,
+    global float3*  AttributeNormal,
+    global float4*  UniformMatrix, // row-major
+    global float4*  InterpPosition,
+    global float3*  InterpNormal,
+    global float4*  InterpPositionWorld)
 {
     size_t item_id = get_global_id(0);
 
-    gclPosition += item_id;
-    gclNormal += item_id;
-    gclPositionWorld += item_id;
-    gclAbbrVertex += item_id;
-    gclAbbrNormal += item_id;
+    InterpPosition += item_id;
+    InterpNormal += item_id;
+    InterpPositionWorld += item_id;
+    AttributeVertex += item_id;
+    AttributeNormal += item_id;
 
-    gclPosition->x = dot(gclMatrix[0], *gclAbbrVertex);
-    gclPosition->y = dot(gclMatrix[1], *gclAbbrVertex);
-    gclPosition->z = dot(gclMatrix[2], *gclAbbrVertex);
-    gclPosition->w = dot(gclMatrix[3], *gclAbbrVertex);
-
-    *gclPosition /= gclPosition->w;
-    *gclNormal = *gclAbbrNormal;
-    *gclPositionWorld = *gclAbbrVertex;
+    mul_mat4_vec4(InterpPosition, UniformMatrix, *AttributeVertex);
+    *InterpPosition /= InterpPosition->w;
+    *InterpNormal = *AttributeNormal;
+    *InterpPositionWorld = *AttributeVertex;
 }
 )EOF";
 
@@ -53,10 +58,23 @@ float3 from_info_f3(global const float4* info, global const float3* attr_array)
            attr_array[2] * info->z;
 }
 
+void frag_main(
+    float4 position,
+    float3 normal,
+    float4 positionWorld,
+    float4* color)
+{
+    normal = normalize(normal);
+    positionWorld /= positionWorld.w;
+
+    float c = dot(normal, normalize(
+        (float4)(-1.5, 3, 2, 1) - positionWorld).xyz);
+    *color = (float4)(c, c, c, 1);
+}
+
 kernel void fragment_shader(
-    global float4*  gclPosition,
-    global float3*  gclNormal,
-    global float4*  gclPositionWorld,
+    global float3*  InterpNormal,
+    global float4*  InterpPositionWorld,
     global float4*  gclFragPos,
     global float4*  gclFragInfo,
     global float4*  gclColorBuffer,
@@ -71,16 +89,18 @@ kernel void fragment_shader(
         (size_t)gclFragPos->x;
     gclDepthBuffer += coord;
 
-    int integral_z = round((gclFragPos->z) * (1 << 24));
-    if((*gclDepthBuffer) < integral_z) return;
+    //int integral_z = round((gclFragPos->z) * (1 << 24));
+    float floating_z = gclFragPos->z;
+    int integral_z = *(int*)&floating_z;
+    if(*gclDepthBuffer != integral_z) return;
 
-    float3 normal = normalize(from_info_f3(gclFragInfo, gclNormal));
-    float4 pos = from_info_f4(gclFragInfo, gclPositionWorld);
-    pos /= pos.w;
+    float4 color = (float4)(0, 0, 0, 1);
+    frag_main(*gclFragPos,
+        from_info_f3(gclFragInfo, InterpNormal),
+        from_info_f4(gclFragInfo, InterpPositionWorld),
+        &color);
 
-    //float c = 255 * gclFragPos->z;
-    float c = 255 * dot(normal, normalize((float4)(-1.5, 3, 2, 1) - pos).xyz);
-    gclColorBuffer[coord] = (float4)(c, c, c, 255);
+    gclColorBuffer[coord] = color * 255;
 }
 )EOF";
 
@@ -124,46 +144,71 @@ const size_t nindices[] = {
 
 int main()
 {
+    try {
+
     std::vector<platform> ps = platform::get();
     std::vector<device> ds = device::get(ps);
     context ctxt(ds.back());
     context_guard cg(ctxt);
 
-    std::ifstream rst_src("../kernels/rasterizer.cl");
-    program prg = compile(rst_src, "-cl-kernel-arg-info");
-    program vert_prg = compile(vert_shader_src);
-    program frag_prg = compile(frag_shader_src);
-
-    kernel krn_vs(vert_prg, "vertex_shader");
-    kernel krn_fr(frag_prg, "fragment_shader");
-    kernel krn_ms(prg, "mark_scanline");
-    kernel krn_fs(prg, "fill_scanline");
-    kernel krn_dt(prg, "depth_test");
-    kernel krn_ia(prg, "image_assembly");
-
     size_t num_vertices = end(vindices) - begin(vindices);
     size_t w = 200, h = 200;
 
-    buffer<cl_float4> gclAbbrVertex(num_vertices, host_map);
-    buffer<cl_float3> gclAbbrNormal(num_vertices, host_map);
-    buffer<col4> gclPosition(num_vertices, host_map);
-    buffer<col3> gclNormal(num_vertices, host_map);
-    buffer<col3> gclPositionWorld(num_vertices, host_map);
-    buffer<row4> gclMatrix(4, host_map);
-    buffer<float> gclViewport { 0, 0, float(w), float(h), };
-    buffer<cl_uint> gclMarkSize { 0 };
-    buffer<cl_uint> gclFragmentSize { 0 };
-    buffer<col4> gclMarkPos(4000, host_map);
-    buffer<col4> gclMarkInfo(4000, host_map);
-    buffer<col4> gclFragPos(20000, host_map);
-    buffer<col4> gclFragInfo(20000, host_map);
-    buffer<cl_uint> gclBufferSize { cl_uint(w), cl_uint(h) };
-    buffer<cl_int> gclDepthBuffer(w * h, host_map);
-    buffer<cl_float4> gclColorBuffer(w * h, host_map);
+    std::ifstream rast_src("../kernels/rasterizer.cl");
+
+    program rast_prg = compile(rast_src, "-cl-kernel-arg-info");
+    program vert_prg = compile(vert_shader_src, "-cl-kernel-arg-info");
+    program frag_prg = compile(frag_shader_src, "-cl-kernel-arg-info");
+
+    pipeline pl;
+
+    pl.bind_kernel_from_program(frag_prg);
+    pl.bind_kernel_from_program(vert_prg);
+    pl.bind_kernel_from_program(rast_prg);
+
+    kernel& krn_vs = *pl.get_kernel("vertex_shader");
+    kernel& krn_fr = *pl.get_kernel("fragment_shader");
+    kernel& krn_ms = *pl.get_kernel("mark_scanline");
+    kernel& krn_fs = *pl.get_kernel("fill_scanline");
+    kernel& krn_dt = *pl.get_kernel("depth_test");
+
+    buffer<cl_float4>   AttributeVertex     (num_vertices, host_map);
+    buffer<cl_float3>   AttributeNormal     (num_vertices, host_map);
+    buffer<col4>        InterpPosition      (num_vertices, host_map);
+    buffer<col3>        InterpNormal        (num_vertices, host_map);
+    buffer<col4>        InterpPositionWorld (num_vertices, host_map);
+    buffer<row4>        UniformMatrix       (4, host_map);
+    buffer<float>       gclViewport         ({ 0, 0, float(w), float(h), });
+    buffer<cl_uint>     gclMarkSize         ({ 0 });
+    buffer<cl_uint>     gclFragmentSize     ({ 0 });
+    buffer<col4>        gclMarkPos          (1000, host_map);
+    buffer<col4>        gclMarkInfo         (1000, host_map);
+    buffer<col4>        gclFragPos          (1000, host_map);
+    buffer<col4>        gclFragInfo         (1000, host_map);
+    buffer<cl_uint>     gclBufferSize       ({ cl_uint(w), cl_uint(h) });
+    buffer<cl_int>      gclDepthBuffer      (w * h, host_map);
+    buffer<cl_float4>   gclColorBuffer      (w * h, host_map);
+
+    pl.auto_bind_buffer(AttributeVertex    );
+    pl.auto_bind_buffer(AttributeNormal    );
+    pl.auto_bind_buffer(InterpPosition     );
+    pl.auto_bind_buffer(InterpNormal       );
+    pl.auto_bind_buffer(InterpPositionWorld);
+    pl.auto_bind_buffer(UniformMatrix      );
+    pl.auto_bind_buffer(gclViewport        );
+    pl.auto_bind_buffer(gclMarkSize        );
+    pl.auto_bind_buffer(gclFragmentSize    );
+    pl.auto_bind_buffer(gclMarkPos         );
+    pl.auto_bind_buffer(gclMarkInfo        );
+    pl.auto_bind_buffer(gclFragPos         );
+    pl.auto_bind_buffer(gclFragInfo        );
+    pl.auto_bind_buffer(gclBufferSize      );
+    pl.auto_bind_buffer(gclDepthBuffer     );
+    pl.auto_bind_buffer(gclColorBuffer     );
 
     for(size_t i = 0; i < num_vertices; i++) {
-        gclAbbrVertex[i] = vertices[vindices[i]];
-        gclAbbrNormal[i] = normals[nindices[i]];
+        AttributeVertex[i] = vertices[vindices[i]];
+        AttributeNormal[i] = normals[nindices[i]];
     }
 
     mat4 pmat = tf::perspective(M_PI / 4, 1. / 1, 1, 10);
@@ -175,38 +220,46 @@ int main()
 
     cout << rmat << endl;
     for(size_t i = 0; i < 4; i++)
-        gclMatrix[i] = rmat.row(i);
+        UniformMatrix[i] = rmat.row(i);
 
     promise cp;
 
-    krn_vs.set_buffer(0, gclAbbrVertex);
-    krn_vs.set_buffer(1, gclAbbrNormal);
-    krn_vs.set_buffer(2, gclMatrix);
-    krn_vs.set_buffer(3, gclPosition);
-    krn_vs.set_buffer(4, gclNormal);
-    krn_vs.set_buffer(5, gclPositionWorld);
-
     cp <<
-        push(gclAbbrVertex) <<
-        push(gclAbbrNormal) <<
-        push(gclMatrix) <<
+        fill(gclDepthBuffer, numeric_limits<int>::max()) <<
+        fill(gclColorBuffer, cl_float4 { 255, 255, 255, 255 }) <<
+        push(AttributeVertex) <<
+        push(AttributeNormal) <<
+        push(UniformMatrix) <<
         run(krn_vs, num_vertices) <<
-        pull(gclPosition) <<
-        wait_until_done;
-
-    for(size_t i = 0; i < num_vertices; i++)
-        cout << gclPosition[i] << endl;
-
-    krn_ms.set_buffer(0, gclPosition);
-    krn_ms.set_buffer(1, gclViewport);
-    krn_ms.set_buffer(2, gclMarkSize);
-    krn_ms.set_buffer(3, gclFragmentSize);
-    krn_ms.set_buffer(4, gclMarkPos);
-    krn_ms.set_buffer(5, gclMarkInfo);
-
-    cp <<
-        //push(gclPosition) <<
+        pull(InterpPosition) <<
+        [&]() {
+            for(size_t i = 0; i < num_vertices; i++)
+                cout << InterpPosition[i] << endl;
+        } <<
         push(gclViewport) <<
+        push(gclMarkSize) <<
+        push(gclFragmentSize) <<
+        [&]() { krn_ms.set_null(krn_ms.get_index("gclMarkInfo")); } <<
+        run(krn_ms, num_vertices / 3) <<
+        pull(gclMarkSize) <<
+        pull(gclFragmentSize) <<
+        [&]() {
+            if(gclMarkSize[0] > gclMarkPos.size() ||
+                    gclMarkSize[0] > gclMarkInfo.size()) {
+                size_t new_mark_size = 1 << size_t(std::log2(gclMarkSize[0])+1);
+                gclMarkPos = buffer<col4>(new_mark_size, host_map);
+                gclMarkInfo = buffer<col4>(new_mark_size, host_map);
+
+                cout << "New Mark: " << new_mark_size << endl;
+            }
+
+            gclMarkSize[0] = 0;
+            gclFragmentSize[0] = 0;
+
+            pl.auto_bind_buffer(gclMarkPos);
+            pl.auto_bind_buffer(gclMarkInfo);
+        } <<
+        wait_until_done <<
         push(gclMarkSize) <<
         push(gclFragmentSize) <<
         run(krn_ms, num_vertices / 3) <<
@@ -214,61 +267,52 @@ int main()
         pull(gclFragmentSize) <<
         pull(gclMarkPos) <<
         pull(gclMarkInfo) <<
-        wait_until_done;
+        [&]() {
+            cout << gclMarkSize[0] << endl;
+            cout << gclFragmentSize[0] << endl;
 
-    cout << gclMarkSize[0] << endl;
-    cout << gclFragmentSize[0] << endl;
-    for(size_t i = 0; i < gclMarkSize[0]; i++) {
-        cout << gclMarkPos[i] << '\t';
-        cout << gclMarkInfo[i] << endl;
-    }   cout << endl << endl;
+            for(size_t i = 0; i < gclMarkSize[0]; i++) {
+                cout << gclMarkPos[i] << '\t';
+                cout << gclMarkInfo[i] << endl;
+            }   cout << endl << endl;
 
-    gclFragmentSize[0] = 0;
+            krn_fs.range(gclMarkSize[0] / 2);
 
-    krn_fs.set_buffer(0, gclMarkPos);
-    krn_fs.set_buffer(1, gclMarkInfo);
-    krn_fs.set_buffer(2, gclViewport);
-    krn_fs.set_buffer(3, gclFragmentSize);
-    krn_fs.set_buffer(4, gclFragPos);
-    krn_fs.set_buffer(5, gclFragInfo);
+            if(gclFragmentSize[0] > gclFragPos.size() ||
+                    gclFragmentSize[0] > gclFragInfo.size()) {
+                size_t new_frag_size = 1 << size_t(std::log2(gclFragmentSize[0])+1);
+                gclFragPos = buffer<col4>(new_frag_size, host_map);
+                gclFragInfo = buffer<col4>(new_frag_size, host_map);
 
-    cp <<
+                cout << "New Frag: " << new_frag_size << endl;
+
+                pl.auto_bind_buffer(gclFragPos);
+                pl.auto_bind_buffer(gclFragInfo);
+            }
+
+            gclFragmentSize[0] = 0;
+        } <<
+        wait_until_done <<
         push(gclFragmentSize) <<
-        run(krn_fs, gclMarkSize[0] / 2) <<
+        run(krn_fs) <<
         pull(gclFragmentSize) <<
         pull(gclFragPos) <<
         pull(gclFragInfo) <<
-        wait_until_done;
+        [&]() {
+            cout << gclFragmentSize[0] << endl;
+            for(size_t i = 0; i < gclFragmentSize[0]; i++) {
+                cout << gclFragPos[i] << '\t';
+                cout << gclFragInfo[i] << endl;
+            }
 
-    cout << gclFragmentSize[0] << endl;
-    for(size_t i = 0; i < gclFragmentSize[0]; i++) {
-        cout << gclFragPos[i] << '\t';
-        cout << gclFragInfo[i] << endl;
-    }
-
-    krn_dt.set_buffer(0, gclFragPos);
-    krn_dt.set_buffer(1, gclBufferSize);
-    krn_dt.set_buffer(2, gclDepthBuffer);
-
-    cp <<
+            krn_dt.range(gclFragmentSize[0]);
+            krn_fr.range(gclFragmentSize[0]);
+        } <<
+        wait_until_done <<
         push(gclBufferSize) <<
-        fill(gclDepthBuffer, (1 << 24)) <<
-        run(krn_dt, gclFragmentSize[0]) <<
+        run(krn_dt) <<
         pull(gclDepthBuffer) <<
-        wait_until_done;
-
-    krn_fr.set_buffer(0, gclPosition);
-    krn_fr.set_buffer(1, gclNormal);
-    krn_fr.set_buffer(2, gclPositionWorld);
-    krn_fr.set_buffer(3, gclFragPos);
-    krn_fr.set_buffer(4, gclFragInfo);
-    krn_fr.set_buffer(5, gclColorBuffer);
-    krn_fr.set_buffer(6, gclBufferSize);
-    krn_fr.set_buffer(7, gclDepthBuffer);
-
-    cp <<
-        fill(gclColorBuffer, cl_float4 { 255, 255, 255, 255 }) <<
-        run(krn_fr, gclFragmentSize[0]) <<
+        run(krn_fr) <<
         pull(gclColorBuffer) <<
         wait_until_done;
 
@@ -282,5 +326,7 @@ int main()
             uint8_t(gclColorBuffer[coord].s[1]) <<
             uint8_t(gclColorBuffer[coord].s[2]);
     }
+
+    } catch(cl::Error e) { cout << e.what() << ' ' << e.err() << endl; }
 }
 

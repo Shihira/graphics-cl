@@ -14,6 +14,28 @@ struct test_failure : std::logic_error {
 
 std::stringstream ctest;
 
+struct test_case_runner {
+    static bool run_test(const std::function<void()>& f) {
+        f();
+        return true;
+    }
+};
+
+template<typename Base>
+struct test_failure_handler {
+    static bool run_test(const std::function<void()>& f) {
+        try {
+            return Base::run_test(f);
+        } catch(const test_failure& e) {
+            std::cout << "\033[1;33mFailed\033[0m: ";
+            std::cout << e.what() << std::endl;
+            return false;
+        }
+    }
+};
+
+typedef test_failure_handler<test_case_runner> default_error_handler;
+
 struct test_case {
     typedef std::function<void()> test_func_type;
 
@@ -21,20 +43,17 @@ struct test_case {
         test_cases_.push_back(std::make_pair(name, test_func));
     }
 
+    template<typename ErrorHandler = default_error_handler>
     static void test_all(bool continue_anyway = false) {
         test_log_.str("");
 
         for(auto& p : test_cases_) {
-            std::cout << "Running " << p.first << " ... ";
+            std::cout << "Running " << p.first << " ... " << std::flush;
 
             bool passed = true;
 
             try {
-                p.second();
-            } catch(const test_failure& e) {
-                std::cout << "\033[1;33mFailed\033[0m: ";
-                std::cout << e.what() << std::endl;
-                passed = false;
+                passed = ErrorHandler::run_test(p.second);
             } catch(const std::exception& e) {
                 std::cout << "\033[1;31mError\033[0m: ";
                 std::cout << e.what() << std::endl;
