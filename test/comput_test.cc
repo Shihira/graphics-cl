@@ -1,6 +1,6 @@
 // cflags: -lOpenCL
 
-#include "../include/comput.h"
+#include "../include/promise.h"
 #include "../include/test.h"
 
 using namespace std;
@@ -79,8 +79,15 @@ def_test_case(kernel_test_reflection) {
             global uint* var1,
             global float4 * var2,
             global pos_t * var3) {
+        *var2 = (float4)(*var1, *var1, 0, 0);
+        *var3 = *var2;
+        *var1 = 1;
     }
-    kernel void fun2() { }
+    kernel void fun2(
+            global int* var4
+        ) {
+        *var4 = 1;
+    }
     )EOF","-cl-kernel-arg-info");
 
     kernel krn(prg, "fun");
@@ -126,14 +133,14 @@ def_test_case_with_fixture(command_queue_run_lambda, sum_up_program_fixture) {
         push(r) <<
         run(krn, 500) <<
         pull(r) <<
-        [&] {
+        call([&] {
             first_lambda_passed = (r[0] == (500 + 499 * 500 / 2));
-        } <<
+        }) <<
         run(krn, 500) <<
         pull(r) <<
-        [&] {
+        call([&] {
             second_lambda_passed = (r[0] == (1000 + 499 * 500));
-        } <<
+        }) <<
         wait_until_done;
 
     assert_true(first_lambda_passed);
@@ -148,12 +155,15 @@ def_test_case_with_fixture(kernel_event_listener, sum_up_program_fixture) {
     run krn_runner(krn);
 
     krn_runner.register_pre([&](const promise& p) {
-        fill(s.begin(), s.end(), s_val);
-        r[0] = 0;
-
         return p <<
-            push(s) <<
-            push(r);
+            callc([&]() {
+                fill(s.begin(), s.end(), s_val);
+                r[0] = 0;
+
+                return promise() <<
+                    push(s) <<
+                    push(r);
+            });
     });
     krn_runner.register_post([&](const promise& p) {
         return p <<
@@ -165,11 +175,11 @@ def_test_case_with_fixture(kernel_event_listener, sum_up_program_fixture) {
 
     promise() <<
         krn_runner <<
-        [&]() { result[0] = r[0]; s_val = 11; } <<
+        call([&]() { result[0] = r[0]; s_val = 11; }) <<
         krn_runner <<
-        [&]() { result[1] = r[0]; s_val = 100; } <<
+        call([&]() { result[1] = r[0]; s_val = 100; }) <<
         krn_runner <<
-        [&]() { result[2] = r[0]; } <<
+        call([&]() { result[2] = r[0]; }) <<
         wait_until_done;
 
     assert_true(result[0] == (1500 + 499 * 500 / 2));

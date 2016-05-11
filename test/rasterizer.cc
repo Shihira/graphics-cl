@@ -4,7 +4,7 @@
 #include <string>
 #include <limits>
 
-#include "../include/comput.h"
+#include "../include/promise.h"
 
 using namespace std;
 using namespace gcl;
@@ -222,9 +222,7 @@ int main()
     for(size_t i = 0; i < 4; i++)
         UniformMatrix[i] = rmat.row(i);
 
-    promise cp;
-
-    cp <<
+    promise() <<
         fill(gclDepthBuffer, numeric_limits<int>::max()) <<
         fill(gclColorBuffer, cl_float4 { 255, 255, 255, 255 }) <<
         push(AttributeVertex) <<
@@ -232,18 +230,18 @@ int main()
         push(UniformMatrix) <<
         run(krn_vs, num_vertices) <<
         pull(InterpPosition) <<
-        [&]() {
+        call([&]() {
             for(size_t i = 0; i < num_vertices; i++)
                 cout << InterpPosition[i] << endl;
-        } <<
+        }) <<
         push(gclViewport) <<
         push(gclMarkSize) <<
         push(gclFragmentSize) <<
-        [&]() { krn_ms.set_null(krn_ms.get_index("gclMarkInfo")); } <<
+        call([&]() { krn_ms.set_null(krn_ms.get_index("gclMarkInfo")); }) <<
         run(krn_ms, num_vertices / 3) <<
         pull(gclMarkSize) <<
         pull(gclFragmentSize) <<
-        [&]() {
+        call([&]() {
             if(gclMarkSize[0] > gclMarkPos.size() ||
                     gclMarkSize[0] > gclMarkInfo.size()) {
                 size_t new_mark_size = 1 << size_t(std::log2(gclMarkSize[0])+1);
@@ -258,16 +256,19 @@ int main()
 
             pl.auto_bind_buffer(gclMarkPos);
             pl.auto_bind_buffer(gclMarkInfo);
-        } <<
-        wait_until_done <<
-        push(gclMarkSize) <<
-        push(gclFragmentSize) <<
-        run(krn_ms, num_vertices / 3) <<
-        pull(gclMarkSize) <<
-        pull(gclFragmentSize) <<
-        pull(gclMarkPos) <<
-        pull(gclMarkInfo) <<
-        [&]() {
+        }) <<
+        callc([&]() {
+            return promise() <<
+                push(gclMarkSize) <<
+                push(gclFragmentSize) <<
+                run(krn_ms, num_vertices / 3) <<
+                pull(gclMarkSize) <<
+                pull(gclFragmentSize) <<
+                pull(gclMarkPos) <<
+                pull(gclMarkInfo) <<
+                call([]() { cout << "Ha!" << endl; });
+        }) <<
+        call([&]() {
             cout << gclMarkSize[0] << endl;
             cout << gclFragmentSize[0] << endl;
 
@@ -291,14 +292,16 @@ int main()
             }
 
             gclFragmentSize[0] = 0;
-        } <<
-        wait_until_done <<
-        push(gclFragmentSize) <<
-        run(krn_fs) <<
-        pull(gclFragmentSize) <<
-        pull(gclFragPos) <<
-        pull(gclFragInfo) <<
-        [&]() {
+        }) <<
+        callc([&]() {
+            return promise() <<
+                push(gclFragmentSize) <<
+                run(krn_fs) <<
+                pull(gclFragmentSize) <<
+                pull(gclFragPos) <<
+                pull(gclFragInfo);
+        }) <<
+        call([&]() {
             cout << gclFragmentSize[0] << endl;
             for(size_t i = 0; i < gclFragmentSize[0]; i++) {
                 cout << gclFragPos[i] << '\t';
@@ -307,13 +310,15 @@ int main()
 
             krn_dt.range(gclFragmentSize[0]);
             krn_fr.range(gclFragmentSize[0]);
-        } <<
-        wait_until_done <<
-        push(gclBufferSize) <<
-        run(krn_dt) <<
-        pull(gclDepthBuffer) <<
-        run(krn_fr) <<
-        pull(gclColorBuffer) <<
+        }) <<
+        callc([&]() {
+            return promise() <<
+                push(gclBufferSize) <<
+                run(krn_dt) <<
+                pull(gclDepthBuffer) <<
+                run(krn_fr) <<
+                pull(gclColorBuffer);
+        }) <<
         wait_until_done;
 
     ofstream f("./test.ppm");

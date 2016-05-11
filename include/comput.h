@@ -113,7 +113,7 @@ struct context : cl::Context {
 private:
     friend struct context_guard;
 
-    static thread_local context* current_context_;
+    static context* current_context_;
 };
 
 struct context_guard {
@@ -124,7 +124,7 @@ private:
     context& ctxt_;
 };
 
-thread_local context* context::current_context_ = nullptr;
+context* context::current_context_ = nullptr;
 
 template<typename FromType, typename ToType>
 struct type_convertor_ {
@@ -215,8 +215,7 @@ template<> struct default_conversion_<row4> { typedef cl_float4 type; };
 template<> struct default_conversion_<col3> { typedef cl_float3 type; };
 
 
-/**
- * buffer
+/* Buffer for General Purpose
  *
  * gcl::buffer wraps operations including transfer data to and from graphic
  * card, convert data between wrapped host data type and raw data.
@@ -363,132 +362,6 @@ public:
 
 static cl::Buffer nullptr_buf(NULL);
 
-typedef std::vector<event> event_set;
-
-/*
- * A promise is a manager of OpenCL command queue and events. You can
- * conveniently enqueue some operations through operator<<, and operations
- * would probably and should be non-block. All operations should inherit from
- * promise_runnable the base class.
- *
- * The semantic of operator<< is that, enqueue the operation and do not execute
- * it instantly, but wait for the completion of previous operation (Even if its
- * the initial promise, there is no guarantee for the instant execution) instead.
- * Many of time the behaviour is implementation-relevant, so it would possibly
- * be executed instantly and get a right answer -- now do not forget to test
- * on some other OpenCL impls, if you want your program cross-platform.
- *
- * Be careful of the difference between call-by-value and call-by-reference.
- * Most operations are call-by-value, but you can still transform them to
- * call-by-reference ones through wrapping them in a functor(lambda or something
- * like that), but it may cause some performance consumption.
- */
-
-struct promise {
-    typedef event (enqueue_func_type)(cl::CommandQueue, const event_set&);
-    typedef promise (operation_func_type)(const promise& p);
-    typedef void (procedure_type)();
-
-    promise() : cmdq_(
-            context::current(),
-            context::current().get_device()) { }
-    promise(const promise& other) :
-        ev_(other.ev_), cmdq_(other.cmdq_) { }
-    promise(std::initializer_list<promise> l)
-    {
-        for(const promise& cp : l) {
-            ev_.insert(ev_.end(), cp.ev_.begin(), cp.ev_.end());
-            if(cmdq_() == NULL) cmdq_ = cp.cmdq_;
-            else if(cmdq_() != cp.cmdq_())
-                throw comput_error("All promises have "
-                        "to belong to the same queue.");
-        }
-    }
-
-    promise operator <<(std::function<enqueue_func_type> f) const {
-        event_set es{f(cmdq_, ev_)};
-        if(es.front()())
-            return promise(es, cmdq_);
-        else
-            return promise(event_set(), cmdq_);
-    }
-
-    promise operator <<(std::function<operation_func_type> f) const {
-        return f(*this);
-    }
-
-    promise operator <<(std::function<procedure_type> f) const {
-        cl_event bar_cle;
-        std::vector<cl_event> es;
-        for(const event& ce : ev_) es.push_back(ce());
-
-        clEnqueueBarrierWithWaitList(cmdq_(), es.size(), es.data(), &bar_cle);
-        cl::UserEvent uev(context::current());
-        procedure_args* args = new procedure_args { uev, f };
-
-        event e(bar_cle);
-        e.setCallback(CL_COMPLETE, procedure_runner, args);
-        return promise(event_set{ uev }, cmdq_);
-    }
-
-protected:
-    const event_set& events() const { return ev_; }
-    const cl::CommandQueue& command_queue() const { return cmdq_; }
-
-    struct procedure_args {
-        cl::UserEvent uev;
-        std::function<procedure_type> f;
-    };
-
-    static void procedure_runner(cl_event, cl_int, void* vp_args) {
-        procedure_args* args = static_cast<procedure_args*>(vp_args);
-
-        args->f();
-        args->uev.setStatus(CL_COMPLETE);
-        delete args;
-    }
-
-    promise(const event_set& e, const cl::CommandQueue& c) :
-        ev_(e), cmdq_(c) { }
-
-private:
-    event_set ev_;
-    cl::CommandQueue cmdq_;
-
-    friend class promise_runnable;
-};
-
-struct promise_runnable {
-    typedef std::function<promise(const promise&)> listener_type;
-
-    promise promise_run(const promise& p) const {
-        return post_func_(run_body(pre_func_(p)));
-    }
-    void register_pre(listener_type f) { pre_func_ = f; }
-    void register_post(listener_type f) { post_func_ = f; }
-
-    virtual ~promise_runnable() { }
-
-protected:
-    virtual promise run_body(const promise& p) const {
-        event bodye = run_body(p.command_queue(), p.events());
-        return promise(event_set{bodye}, p.command_queue());
-    }
-    virtual event run_body(cl::CommandQueue cmdq, const event_set& ev) const {
-        return event();
-    }
-
-    listener_type pre_func_ = does_nothing_;
-    listener_type post_func_ = does_nothing_;
-
-private:
-    static promise does_nothing_(const promise& p) { return p; }
-};
-
-inline promise operator<<(const promise& p, const promise_runnable& r) {
-    return r.promise_run(p);
-}
-
 struct kernel : cl::Kernel {
     using cl::Kernel::Kernel;
 
@@ -536,115 +409,6 @@ private:
     size_t range_ = 1;
 };
 
-struct mapop_ : promise_runnable {
-    typedef abstract_buffer buf_type;
-    typedef void (buf_type::*conv_func_type)();
-
-    buf_type& buf_;
-
-    cl_uint map_flag_;
-    conv_func_type conv_func_;
-
-    mapop_(buf_type& b, cl_uint mf, conv_func_type cf) :
-        buf_(b), map_flag_(mf), conv_func_(cf) { }
-
-protected:
-    event run_body(cl::CommandQueue cmdq,
-            const event_set& ev) const override {
-        event e;
-        void* mem = cmdq.enqueueMapBuffer(buf_.buf(), false, map_flag_, 0,
-                buf_.size_in_bytes(), &ev, &e);
-
-        cl::UserEvent uev(context::current());
-        conv_args* args = new conv_args { uev, conv_func_, buf_ };
-        e.setCallback(CL_COMPLETE, conv_native_kernel, args);
-
-        event_set mapped_es{uev};
-        cmdq.enqueueUnmapMemObject(buf_.buf(),
-                mem, &mapped_es, &e);
-
-        return e;
-    }
-
-private:
-    struct conv_args {
-        cl::UserEvent uev;
-        conv_func_type conv_func;
-        buf_type& buf;
-    };
-
-    static void conv_native_kernel(cl_event, cl_int, void* vp_args) {
-        conv_args* args = static_cast<conv_args*>(vp_args);
-        (args->buf.*(args->conv_func))();
-        args->uev.setStatus(CL_COMPLETE);
-        delete args;
-    }
-};
-
-struct push : mapop_ {
-    push(buf_type& b) :
-        mapop_(b, CL_MAP_WRITE, &buf_type::conv_host_to_dev) { }
-};
-
-struct pull : mapop_ {
-    pull(buf_type& b) :
-        mapop_(b, CL_MAP_READ, &buf_type::conv_dev_to_host) { }
-};
-
-template<typename HostType, typename DevType>
-struct fill_functor_ : promise_runnable {
-    typedef buffer<HostType, DevType> buf_type;
-
-    buf_type& buf_;
-    typename buf_type::device_type pat_;
-
-    fill_functor_(buf_type& b, const typename buf_type::host_type& pat) :
-        buf_(b)
-    {
-        buf_type::convertor::assign(&pat_, &pat, 1);       
-    }
-
-protected:
-    event run_body(cl::CommandQueue cmdq,
-            const event_set& ev) const override {
-        event e;
-        cmdq.enqueueFillBuffer(buf_.buf(), pat_, 0, buf_.size_in_bytes(),
-                &ev, &e);
-        return e;
-    }
-};
-
-template<typename HostType, typename DevType>
-fill_functor_<HostType, DevType> fill(
-        buffer<HostType, DevType>& b, const HostType& d) {
-    return fill_functor_<HostType, DevType>(b, d);
-}
-
-struct run/*_kernel_functor*/ : promise_runnable {
-public:
-    run/*_kernel_functor*/(kernel& krn, size_t gp = 0) :
-        krn_(krn), global_partition_(gp) { }
-
-protected:
-    event run_body(cl::CommandQueue cmdq,
-            const event_set& ev) const override {
-        event e;
-        if(global_partition_)
-            cmdq.enqueueNDRangeKernel(krn_, cl::NullRange,
-                    cl::NDRange(global_partition_), cl::NullRange,
-                    &ev, &e);
-        else
-            cmdq.enqueueNDRangeKernel(krn_, cl::NullRange,
-                    cl::NDRange(krn_.range()), cl::NullRange,
-                    &ev, &e);
-        return e;
-    }
-
-private:
-    kernel& krn_;
-    size_t global_partition_;
-};
-
 program compile(const std::string& s,
     const std::string& options = "")
 {
@@ -666,14 +430,6 @@ program compile(const std::string& s,
     return prg;
 }
 
-event wait(cl::CommandQueue cmdq,
-        const event_set& ev) {
-    cl::WaitForEvents(ev);
-    return event(NULL);
-}
-
-auto wait_until_done = wait;
-
 program compile(std::istream& f, const std::string& options = "")
 {
     return compile(std::string(
@@ -686,7 +442,8 @@ program compile(std::istream&& f, const std::string& options = "")
     return compile(f, options);
 }
 
-/*
+/* Pipeline Assembles Elements like Buffers and Kernels
+ *
  * A pipeline is a manager of a series of kernels and buffers. You need to
  * register all buffers with their name bound, and all kernels with their
  * dependencies bound. The pipeline will automatically bind buffers to
