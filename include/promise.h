@@ -274,10 +274,11 @@ const wait wait_until_done = wait();
  * sure those operations to run (NOTE: not to be enqueued) after this functor
  * has got called.
  *
- * You should never enqueue an operation into an existent queue asynchronously
- * unless it's ensured to be an out-of-order queue, especially when there are
+ * You should have carefully considered before enqueuing an operation into an
+ * existent not OOO promise asynchronously, especially when there are some
  * operations waiting in that queue. When you enqueue dependent operations,
- * there may produce deadlocks. A proper way is to create a new promise.
+ * they may produce deadlocks. A proper way is to create a new promise or use
+ * a certainly empty promise.
  *
  * IMPLEMENTATION DETAILS:
  *
@@ -293,8 +294,10 @@ const wait wait_until_done = wait();
  * another functor used to set that user event :-).
  */
 
-run_procedure_functor_<void()> run_functor(
-        const std::function<void()>& f)
+typedef run_procedure_functor_<void()> run_functor_type;
+typedef run_procedure_functor_<promise()> run_functor_chain_type;
+
+run_functor_type run_functor(const std::function<void()>& f)
 {
     return run_procedure_functor_<void()>(f,
         [](std::function<void()> func, cl::UserEvent uev) {
@@ -303,7 +306,7 @@ run_procedure_functor_<void()> run_functor(
         });
 }
 
-run_procedure_functor_<promise()> run_functor_chain(
+run_functor_chain_type run_functor_chain(
         const std::function<promise()>& f)
 {
     return run_procedure_functor_<promise()>(f,
@@ -316,12 +319,10 @@ run_procedure_functor_<promise()> run_functor_chain(
 }
 
 // Alias for run_functor
-auto call(const std::function<void()>& f)
-        -> decltype(run_functor(f))
+run_functor_type call(const std::function<void()>& f)
 { return run_functor(f); }
 // Alias for run_functor_chain
-auto callc(const std::function<promise()>& f)
-        -> decltype(run_functor_chain(f))
+run_functor_chain_type callc(const std::function<promise()>& f)
 { return run_functor_chain(f); }
 
 

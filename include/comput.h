@@ -25,7 +25,7 @@ namespace gcl {
 typedef cl::Event event;
 typedef cl::Program program;
 
-class comput_error : public std::exception {
+struct comput_error : public std::exception {
 public:
     comput_error(const std::string& s) : what_arg_(s) { }
 

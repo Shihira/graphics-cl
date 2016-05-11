@@ -154,13 +154,15 @@ def_test_case_with_fixture(kernel_event_listener, sum_up_program_fixture) {
 
     run krn_runner(krn);
 
+    promise push_p;
+
     krn_runner.register_pre([&](const promise& p) {
         return p <<
             callc([&]() {
                 fill(s.begin(), s.end(), s_val);
                 r[0] = 0;
 
-                return promise() <<
+                return push_p <<
                     push(s) <<
                     push(r);
             });
