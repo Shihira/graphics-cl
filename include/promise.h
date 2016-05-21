@@ -29,11 +29,11 @@ struct promise_runnable;
  * like that), but it may cause some performance consumption.
  */
 struct promise {
-    promise() : cmdq_(
+    promise(bool sync = false) : cmdq_(
             context::current(),
-            context::current().get_device()) { }
+            context::current().get_device()), sync_(sync) { }
     promise(const promise& other) :
-        ev_(other.ev_), cmdq_(other.cmdq_) { }
+        ev_(other.ev_), cmdq_(other.cmdq_), sync_(other.sync_) { }
     promise(std::initializer_list<promise> l)
     {
         for(const promise& cp : l) {
@@ -47,12 +47,15 @@ struct promise {
      */
     promise operator<<(const promise_runnable& r) const;
 
+    bool is_sync() const { return sync_; }
+    void set_sync(bool s) { sync_ = s; }
+
 protected:
     const event_set& events() const { return ev_; }
     const cl::CommandQueue& command_queue() const { return cmdq_; }
 
-    promise(const event_set& e, const cl::CommandQueue& c) :
-            ev_(e), cmdq_(c) {
+    promise(const event_set& e, const cl::CommandQueue& c, bool sync) :
+            ev_(e), cmdq_(c), sync_(sync) {
         // reject null events
         if(e[0]() == NULL) ev_.clear();
     }
@@ -61,7 +64,9 @@ private:
     event_set ev_;
     cl::CommandQueue cmdq_;
 
-    friend class promise_runnable;
+    bool sync_ = false;
+
+    friend struct promise_runnable;
 };
 
 /* Base Class of Asynchronous Operations
@@ -86,22 +91,38 @@ struct promise_runnable {
 
 protected:
     virtual promise run_body(const promise& p) const {
-        event bodye = run_body(p.command_queue(), p.events());
-        return promise(event_set{bodye}, p.command_queue());
+        event bodye = run_body(p.command_queue(), p.events(), p.is_sync());
+        return construct_promise(p.command_queue(),
+                event_set{bodye}, p.is_sync());
     }
-    virtual event run_body(cl::CommandQueue cmdq, const event_set& ev) const {
+    virtual event run_body(cl::CommandQueue cmdq,
+            const event_set& ev, bool sync) const {
         return event();
     }
 
     listener_type pre_func_ = do_nothing_;
     listener_type post_func_ = do_nothing_;
 
+    static cl::CommandQueue get_command_queue(const promise& p) {
+        return p.command_queue();
+    }
+
+    static const event_set& get_events(const promise& p) {
+        return p.events();
+    }
+
+    static promise construct_promise(
+            const cl::CommandQueue& c, const event_set& e, bool sync) {
+        return promise(e, c, sync);
+    }
+
 private:
     static promise do_nothing_(const promise& p) { return p; }
 };
 
 inline promise promise::operator<<(const promise_runnable& r) const {
-    return r.promise_run(*this);
+    auto p = r.promise_run(*this);
+    return p;
 }
 
 // Abstracts Common Functionalities of `push` and `pop`
@@ -111,28 +132,92 @@ struct mapop_ : promise_runnable {
 
     buf_type& buf_;
 
-    cl_uint map_flag_;
+    bool rw_flag_; // true for read and false for write
     conv_func_type conv_func_;
 
-    mapop_(buf_type& b, cl_uint mf, conv_func_type cf) :
-        buf_(b), map_flag_(mf), conv_func_(cf) { }
+    mapop_(buf_type& b, bool rwf, conv_func_type cf) :
+        buf_(b), rw_flag_(rwf), conv_func_(cf) { }
 
 protected:
     event run_body(cl::CommandQueue cmdq,
-            const event_set& ev) const override {
-        event e;
-        void* mem = cmdq.enqueueMapBuffer(buf_.buf(), false, map_flag_, 0,
-                buf_.size_in_bytes(), &ev, &e);
+            const event_set& ev, bool sync) const override {
+        if(buf_.type() == host_map) {
+            if(!sync) {
+                event e;
+                void* mem = cmdq.enqueueMapBuffer(buf_.buf(), false,
+                        rw_flag_ ? CL_MAP_READ : CL_MAP_WRITE, 0,
+                        buf_.size_in_bytes(), &ev, &e);
 
-        cl::UserEvent uev(context::current());
-        conv_args_t* args = new conv_args_t { uev, conv_func_, buf_ };
-        e.setCallback(CL_COMPLETE, conv_native_kernel, args);
+                cl::UserEvent uev(context::current());
+                conv_args_t* args = new conv_args_t { uev, conv_func_, buf_ };
+                e.setCallback(CL_COMPLETE, conv_native_kernel, args);
 
-        event_set mapped_es{uev};
-        cmdq.enqueueUnmapMemObject(buf_.buf(),
-                mem, &mapped_es, &e);
+                event_set mapped_es{uev};
+                cmdq.enqueueUnmapMemObject(buf_.buf(),
+                        mem, &mapped_es, &e);
 
-        return e;
+                return e;
+            } else {
+                void* mem = cmdq.enqueueMapBuffer(buf_.buf(), true,
+                        rw_flag_ ? CL_MAP_READ : CL_MAP_WRITE, 0,
+                        buf_.size_in_bytes(), nullptr, nullptr);
+
+                (buf_.*conv_func_)();
+
+                cmdq.enqueueUnmapMemObject(buf_.buf(),
+                        mem, nullptr, nullptr);
+            }
+        } else if(buf_.type() == direct) {
+            if(!sync) {
+                if(rw_flag_) {
+                    event e;
+
+                    cmdq.enqueueReadBuffer(buf_.buf(), true, 0,
+                        buf_.size_in_bytes(), buf_.erased_device_data(),
+                        &ev, &e);
+
+                    cl::UserEvent uev(context::current());
+                    conv_args_t* args = new conv_args_t {
+                        uev, conv_func_, buf_ };
+                    e.setCallback(CL_COMPLETE, conv_native_kernel, args);
+
+                    return uev;
+                } else {
+                    event e;
+
+                    cmdq.enqueueBarrierWithWaitList(&ev, &e);
+
+                    cl::UserEvent uev(context::current());
+                    conv_args_t* args = new conv_args_t {
+                        uev, conv_func_, buf_ };
+                    e.setCallback(CL_COMPLETE, conv_native_kernel, args);
+
+                    event_set write_es{uev};
+                    cmdq.enqueueWriteBuffer(buf_.buf(), true, 0,
+                        buf_.size_in_bytes(), buf_.erased_device_data(),
+                        &write_es, &e);
+
+                    return e;
+                }
+            } else {
+                if(rw_flag_) {
+                    cmdq.enqueueReadBuffer(buf_.buf(), true, 0,
+                        buf_.size_in_bytes(), buf_.erased_device_data(),
+                        nullptr, nullptr);
+
+                    (buf_.*conv_func_)();
+                } else {
+                    (buf_.*conv_func_)();
+
+                    cmdq.enqueueWriteBuffer(buf_.buf(), true, 0,
+                        buf_.size_in_bytes(), buf_.erased_device_data(),
+                        nullptr, nullptr);
+                }
+            }
+        } else
+            throw comput_error("Buffer type not supported.");
+
+        return event(NULL);
     }
 
 private:
@@ -153,13 +238,13 @@ private:
 // Convert Data and Push a Buffer
 struct push : mapop_ {
     push(buf_type& b) :
-        mapop_(b, CL_MAP_WRITE, &buf_type::conv_host_to_dev) { }
+        mapop_(b, false, &buf_type::conv_host_to_dev) { }
 };
 
 // Pop a Buffer and Convert Data
 struct pull : mapop_ {
     pull(buf_type& b) :
-        mapop_(b, CL_MAP_READ, &buf_type::conv_dev_to_host) { }
+        mapop_(b, true, &buf_type::conv_dev_to_host) { }
 };
 
 template<typename HostType, typename DevType>
@@ -177,10 +262,10 @@ struct fill_functor_ : promise_runnable {
 
 protected:
     event run_body(cl::CommandQueue cmdq,
-            const event_set& ev) const override {
+            const event_set& ev, bool sync) const override {
         event e;
         cmdq.enqueueFillBuffer(buf_.buf(), pat_, 0, buf_.size_in_bytes(),
-                &ev, &e);
+                sync ? nullptr : &ev, sync ? nullptr : &e);
         return e;
     }
 };
@@ -199,16 +284,16 @@ struct run_kernel : promise_runnable {
 
 protected:
     event run_body(cl::CommandQueue cmdq,
-            const event_set& ev) const override {
+            const event_set& ev, bool sync) const override {
         event e;
         if(global_partition_)
             cmdq.enqueueNDRangeKernel(krn_, cl::NullRange,
                     cl::NDRange(global_partition_), cl::NullRange,
-                    &ev, &e);
+                    sync ? nullptr : &ev, sync ? nullptr : &e);
         else
             cmdq.enqueueNDRangeKernel(krn_, cl::NullRange,
                     cl::NDRange(krn_.range()), cl::NullRange,
-                    &ev, &e);
+                    sync ? nullptr : &ev, sync ? nullptr : &e);
         return e;
     }
 
@@ -227,15 +312,20 @@ struct run_procedure_functor_ : promise_runnable {
             functor_(f), handler_(h) { }
 
     event run_body(cl::CommandQueue cmdq,
-            const event_set& ev) const override {
-        event e;
-        cmdq.enqueueBarrierWithWaitList(&ev, &e);
+            const event_set& ev, bool sync) const override {
+        if(!sync) {
+            event e;
+            cmdq.enqueueBarrierWithWaitList(&ev, &e);
 
-        cl::UserEvent uev(context::current());
-        arg_t* args = new arg_t { uev, functor_, handler_ };
-        e.setCallback(CL_COMPLETE, event_callback, args);
+            cl::UserEvent uev(context::current());
+            arg_t* args = new arg_t { uev, functor_, handler_ };
+            e.setCallback(CL_COMPLETE, event_callback, args);
 
-        return uev;
+            return uev;
+        } else {
+            handler_(functor_, cl::UserEvent());
+            return event();
+        }
     }
 
 private:
@@ -257,8 +347,9 @@ private:
 
 struct wait : promise_runnable {
     event run_body(cl::CommandQueue cmdq,
-            const event_set& ev) const override {
-        cl::WaitForEvents(ev);
+            const event_set& ev, bool sync) const override {
+        if(!ev.empty())
+            cl::WaitForEvents(ev);
         return event(NULL);
     }
 };
@@ -302,7 +393,8 @@ run_functor_type run_functor(const std::function<void()>& f)
     return run_procedure_functor_<void()>(f,
         [](std::function<void()> func, cl::UserEvent uev) {
             func();
-            uev.setStatus(CL_COMPLETE);
+            if(uev())
+                uev.setStatus(CL_COMPLETE);
         });
 }
 
@@ -311,10 +403,13 @@ run_functor_chain_type run_functor_chain(
 {
     return run_procedure_functor_<promise()>(f,
         [](std::function<promise()> func, cl::UserEvent uev) {
-            func() <<
-                run_functor([uev]() -> void {
-                    clSetUserEventStatus(uev(), CL_COMPLETE);
-                });
+            if(uev())
+                func() <<
+                    run_functor([uev]() -> void {
+                        clSetUserEventStatus(uev(), CL_COMPLETE);
+                    });
+            else
+                func();
         });
 }
 

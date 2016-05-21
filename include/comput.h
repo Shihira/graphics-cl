@@ -226,19 +226,24 @@ template<> struct default_conversion_<col3> { typedef cl_float3 type; };
  * equivalent, and conversion functions do nothing.
  */
 
+enum buffer_type {
+    host_map = CL_MEM_USE_HOST_PTR,
+    no_access = CL_MEM_HOST_NO_ACCESS,
+    direct = CL_MEM_READ_WRITE,
+};
+
 struct abstract_buffer {
     virtual cl::Buffer buf() = 0;
     virtual size_t size() const = 0;
+    virtual buffer_type type() const = 0;
     virtual size_t size_in_bytes() const = 0;
     virtual void conv_dev_to_host() = 0;
     virtual void conv_host_to_dev() = 0;
 
-    virtual ~abstract_buffer() { }
-};
+    virtual const void* erased_device_data() const = 0;
+    virtual void* erased_device_data() = 0;
 
-enum buffer_type {
-    host_map = CL_MEM_USE_HOST_PTR,
-    no_access = CL_MEM_HOST_NO_ACCESS,
+    virtual ~abstract_buffer() { }
 };
 
 template<
@@ -255,17 +260,20 @@ struct buffer : abstract_buffer {
 
     buffer() { }
 
+    // direct read/write is a better choice for small amount of data
     buffer(const std::initializer_list<host_type>& l,
-            buffer_type t = host_map) :
+            buffer_type t = direct) :
         size_(std::distance(l.begin(), l.end())),
         bt_(t)
     {
         std::copy(l.begin(), l.end(), host_data());
     }
 
+    // device-end data chunk
     buffer(size_t count, buffer_type t = no_access) :
         size_(count), bt_(t) { }
 
+    // large amount of duplicated data
     buffer(size_t count, host_type v, buffer_type t = host_map) :
         size_(count),
         bt_(t)
@@ -280,11 +288,10 @@ struct buffer : abstract_buffer {
     const_iterator cbegin() const { return host_data(); }
     const_iterator cend() const { return host_data() + size_; }
 
-    cl::Buffer buf() {
+    cl::Buffer buf() override {
         if(dev_buf_() == NULL) {
             dev_buf_ = cl::Buffer(
                 context::current(),
-                //bt_ == host_map ? CL_MEM_USE_HOST_PTR : CL_MEM_READ_WRITE,
                 static_cast<cl_device_type>(bt_),
                 size() * sizeof(device_type),
                 bt_ == host_map ? device_data() : nullptr
@@ -326,10 +333,19 @@ struct buffer : abstract_buffer {
         return dev_data_.get();
     }
 
-    size_t size() const { return size_; }
-    size_t size_in_bytes() const { return sizeof(device_type) * size_; }
-    host_type& operator[](size_t idx) { return host_data()[idx]; }
-    const host_type& operator[](size_t idx) const { return host_data()[idx]; }
+    void* erased_device_data() override { return device_data(); }
+    const void* erased_device_data() const override { return device_data(); }
+
+    size_t size() const override { return size_; }
+    size_t size_in_bytes() const override { return sizeof(device_type) * size_; }
+    host_type& operator[](size_t idx) {
+        if(idx >= size()) throw comput_error("Access out of range");
+        return host_data()[idx];
+    }
+    const host_type& operator[](size_t idx) const {
+        if(idx >= size()) throw comput_error("Access out of range");
+        return host_data()[idx];
+    }
 
     buffer& operator=(buffer&& buf) {
         size_ = std::move(buf.size_);
@@ -341,6 +357,10 @@ struct buffer : abstract_buffer {
         return *this;
     }
 
+    buffer_type type() const override {
+        return bt_;
+    }
+
 private:
     size_t size_;
     buffer_type bt_;
@@ -349,12 +369,12 @@ private:
     cl::Buffer dev_buf_;
 
 public:
-    void conv_dev_to_host() {
+    void conv_dev_to_host() override {
         //if((void*)host_data() == (void*)device_data()) return;
         inv_convertor::assign(host_data(), device_data(), size());
     }
 
-    void conv_host_to_dev() {
+    void conv_host_to_dev() override {
         //if((void*)host_data() == (void*)device_data()) return;
         convertor::assign(device_data(), host_data(), size());
     }

@@ -7,6 +7,21 @@
 
 namespace gcl {
 
+struct color_t_ {
+    uint8_t a;
+    uint8_t b;
+    uint8_t g;
+    uint8_t r;
+};
+
+template<> struct type_convertor_<cl_uint, color_t_> {
+    static void assign(color_t_* t, const cl_uint* f, size_t sz) { }
+};
+
+template<> struct type_convertor_<color_t_, cl_uint> {
+    static void assign(cl_uint* t, const color_t_* f, size_t sz) { }
+};
+
 struct rasterizer_pipeline : pipeline {
 
     buffer<float>       gclViewport;
@@ -18,15 +33,16 @@ struct rasterizer_pipeline : pipeline {
     buffer<col4>        gclFragInfo;
     buffer<cl_uint>     gclBufferSize;
     buffer<cl_int>      gclDepthBuffer;
-    buffer<cl_float4>   gclColorBuffer;
+    buffer<col4>        gclColorBuffer;
+    buffer<color_t_, cl_uint>     gclPixelBuffer;
 
     rasterizer_pipeline() :
         gclMarkSize         ({ 0 }),
         gclFragmentSize     ({ 0 }),
-        gclMarkPos          (1000, host_map),
-        gclMarkInfo         (1000, host_map),
-        gclFragPos          (1000, host_map),
-        gclFragInfo         (1000, host_map)
+        gclMarkPos          (1000),
+        gclMarkInfo         (1000),
+        gclFragPos          (1000),
+        gclFragInfo         (1000)
     {
         auto_bind_buffer(gclMarkSize        );
         auto_bind_buffer(gclFragmentSize    );
@@ -34,6 +50,9 @@ struct rasterizer_pipeline : pipeline {
         auto_bind_buffer(gclMarkInfo        );
         auto_bind_buffer(gclFragPos         );
         auto_bind_buffer(gclFragInfo        );
+
+        main_promise.set_sync(true);
+        async_promise.set_sync(true);
     }
 
     rasterizer_pipeline(size_t w, size_t h) :
@@ -48,6 +67,7 @@ struct rasterizer_pipeline : pipeline {
         krn_mark_scanline_ = get_kernel("mark_scanline");
         krn_fill_scanline_ = get_kernel("fill_scanline");
         krn_depth_test_    = get_kernel("depth_test");
+        krn_adapt_pixel    = get_kernel("adapt_pixel");
     }
 
     void set_vertex_shader_program(const program& p,
@@ -67,13 +87,15 @@ struct rasterizer_pipeline : pipeline {
     void set_size(size_t w, size_t h) {
         gclViewport    = buffer<float>     ({ 0, 0, float(w), float(h) });
         gclBufferSize  = buffer<cl_uint>   ({ cl_uint(w), cl_uint(h) });
-        gclDepthBuffer = buffer<cl_int>    (w * h, host_map);
-        gclColorBuffer = buffer<cl_float4> (w * h, host_map);
+        gclDepthBuffer = buffer<cl_int>    (w * h);
+        gclColorBuffer = buffer<col4>      (w * h);
+        gclPixelBuffer = buffer<color_t_, cl_uint>   (w * h, direct);
 
         auto_bind_buffer(gclViewport        );
         auto_bind_buffer(gclBufferSize      );
         auto_bind_buffer(gclDepthBuffer     );
         auto_bind_buffer(gclColorBuffer     );
+        auto_bind_buffer(gclPixelBuffer     );
     }
 
     void set_vertex_number(size_t n) {
@@ -91,7 +113,12 @@ public:
 
     promise clear_color_buffer_stage() {
         return async_promise <<
-            fill(gclColorBuffer, cl_float4 { 255, 255, 255, 255 });
+            fill(gclColorBuffer, col4 { 255, 255, 255, 255 });
+    }
+
+    promise setup_stage() {
+        return async_promise <<
+            push(gclViewport);
     }
 
     promise vertex_shading_stage() {
@@ -107,7 +134,6 @@ public:
             krn_mark_scanline_->get_index("gclMarkInfo"));
 
         return async_promise <<
-            push(gclViewport) <<
             push(gclMarkSize) <<
             push(gclFragmentSize) <<
             run(*krn_mark_scanline_, vertex_number / 3) <<
@@ -119,8 +145,10 @@ public:
                 gclMarkSize[0] > gclMarkInfo.size()) {
             size_t new_mark_size = 1 <<
                     size_t(std::log2(gclMarkSize[0]) + 1);
-            gclMarkPos = buffer<col4>(new_mark_size, host_map);
-            gclMarkInfo = buffer<col4>(new_mark_size, host_map);
+            gclMarkPos = buffer<col4>(new_mark_size);
+            gclMarkInfo = buffer<col4>(new_mark_size);
+
+            std::cout << "Requiring Mark " << new_mark_size << std::endl;
         }
 
         auto_bind_buffer(gclMarkPos);
@@ -151,6 +179,8 @@ public:
 
             auto_bind_buffer(gclFragPos);
             auto_bind_buffer(gclFragInfo);
+
+            std::cout << "Requiring Mark " << new_frag_size << std::endl;
         }
 
         gclFragmentSize[0] = 0;
@@ -172,14 +202,29 @@ public:
     promise fragment_shading_stage() {
         return async_promise <<
             run(*krn_fragment_shader_, gclFragmentSize[0]) <<
-            pull(gclColorBuffer);
+            run(*krn_adapt_pixel, gclPixelBuffer.size());
     }
 
-#define CALLC_(memfn) callc(std::bind(&rasterizer_pipeline::memfn, this))
-#define CALLP_(memfn) call(std::bind(&rasterizer_pipeline::memfn, this))
+    promise retrieve_color_buffer() {
+        return async_promise <<
+            pull(gclPixelBuffer);
+    }
 
-    void render() {
+#define CALLC_(memfn) \
+    call([&](){if(prof) std::cout<<#memfn<<": ";}) << \
+    callc(std::bind(&rasterizer_pipeline::memfn, this)) << \
+    call([&](){if(prof) {struct timespec tmpts;clock_gettime(CLOCK_REALTIME,&tmpts);std::cout<<(tmpts.tv_nsec-ts.tv_nsec)/1000000.0<<std::endl;}clock_gettime(CLOCK_REALTIME,&ts);})
+
+#define CALLP_(memfn) \
+    call([&](){if(prof) std::cout<<#memfn<<": ";}) << \
+    call(std::bind(&rasterizer_pipeline::memfn, this)) << \
+    call([&](){if(prof) {struct timespec tmpts;clock_gettime(CLOCK_REALTIME,&tmpts);std::cout<<(tmpts.tv_nsec-ts.tv_nsec)/1000000.0<<std::endl;}clock_gettime(CLOCK_REALTIME,&ts);})
+
+    void render(bool prof=false) {
+        struct timespec ts;
+
         main_promise <<
+            CALLC_(setup_stage) <<
             CALLC_(clear_depth_buffer_stage) <<
             CALLC_(clear_color_buffer_stage) <<
             CALLC_(vertex_shading_stage) <<
@@ -190,6 +235,7 @@ public:
             CALLC_(fill_scanline_stage) <<
             CALLC_(depth_test_stage) <<
             CALLC_(fragment_shading_stage) <<
+            CALLC_(retrieve_color_buffer) <<
             wait_until_done;
     }
 
@@ -202,6 +248,7 @@ protected:
     kernel* krn_mark_scanline_ = nullptr;
     kernel* krn_fill_scanline_ = nullptr;
     kernel* krn_depth_test_ = nullptr;
+    kernel* krn_adapt_pixel = nullptr;
 
     size_t vertex_number = 3;
 

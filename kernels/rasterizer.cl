@@ -153,9 +153,9 @@ kernel void mark_scanline(
     for(int i = 0; i < 3; i++) {
         triangle[i] /= triangle[i].w;
         triangle[i].x *= gclViewport[VP_WIDTH] / 2;
-        triangle[i].x += VP_LEFT + gclViewport[VP_WIDTH] / 2;
+        triangle[i].x += gclViewport[VP_LEFT] + gclViewport[VP_WIDTH] / 2;
         triangle[i].y *= gclViewport[VP_HEIGHT] / 2;
-        triangle[i].y += VP_TOP + gclViewport[VP_HEIGHT] / 2;
+        triangle[i].y += gclViewport[VP_TOP] + gclViewport[VP_HEIGHT] / 2;
         triangle[i].z *= 0.5;
         triangle[i].z += 0.5;
     }
@@ -166,7 +166,6 @@ kernel void mark_scanline(
     inf_t quad_inf[4]; 
     pos_t quad_pos[4];
     extract_quad(triangle, idx, quad_inf, quad_pos);
-
     for(int i = 0; i < 4; i++)
         quad_pos[i].y = floor(quad_pos[i].y);
 
@@ -174,6 +173,8 @@ kernel void mark_scanline(
     size_t y_2 = quad_pos[3].y - quad_pos[2].y;
 
     if(gclMarkInfo == NULL || gclMarkPos == NULL || gclFragmentSize == NULL) {
+        size_t y = y_1 + y_2;
+        if(y > gclViewport[VP_HEIGHT]) y = gclViewport[VP_HEIGHT];
         atomic_add(gclMarkSize, (y_1 + y_2) * 2);
         return;
     }
@@ -184,8 +185,8 @@ kernel void mark_scanline(
            end_2[4] = { quad_inf[3], quad_inf[3], quad_pos[3], quad_pos[3], };
 
 #define scanline_interpolate_func(data, sz) { \
-    /*if(is_in_viewport(&data[2], gclViewport) || \
-       is_in_viewport(&data[3], gclViewport)) {*/ \
+    if(is_in_viewport(&data[2], gclViewport) || \
+       is_in_viewport(&data[3], gclViewport)) { \
         size_t old = atomic_add(gclMarkSize, 2); \
         gclMarkInfo[old + 0] = data[0]; \
         gclMarkInfo[old + 1] = data[1]; \
@@ -194,7 +195,7 @@ kernel void mark_scanline(
         gclMarkPos[old + 0].z = data[2].z; \
         gclMarkPos[old + 1].z = data[3].z; \
         atomic_add(gclFragmentSize, gclMarkPos[old+1].x - gclMarkPos[old].x); \
-    /*}*/ \
+    } \
 }
 
     interpolate_segment(float4, y_1, 4, beg_1, end_1,
@@ -228,11 +229,11 @@ kernel void fill_scanline(
     float4 end[2] = { gclMarkPos[1], gclMarkInfo[1] };
 
 #define fragment_interpolate_func(data, sz) { \
-    /*if(is_in_viewport(&data[0], gclViewport)) {*/ \
+    if(is_in_viewport(&data[0], gclViewport)) { \
         size_t old = atomic_inc(gclFragmentSize); \
         gclFragPos[old] = data[0]; \
         gclFragInfo[old] = data[1]; \
-    /*}*/ \
+    } \
 }
 
     interpolate_segment(float4, len, 2, beg, end,
@@ -257,5 +258,22 @@ kernel void depth_test(
     int integral_z = *(int*)&floating_z;
 
     atomic_min(gclDepthBuffer, integral_z);
+}
+
+kernel void adapt_pixel(
+        in      float4* gclColorBuffer,
+        in      float*  gclViewport,
+        out     uint*  gclPixelBuffer)
+{
+    size_t item_id = get_global_id(0);
+    size_t w = gclViewport[VP_WIDTH], h = gclViewport[VP_HEIGHT];
+
+    gclColorBuffer += item_id;
+    gclPixelBuffer += (item_id % w) + (h - item_id / w - 1) * w;
+
+    *gclPixelBuffer =
+        (uint)(uchar)(gclColorBuffer->x) << 16 |
+        (uint)(uchar)(gclColorBuffer->y) << 8 |
+        (uint)(uchar)(gclColorBuffer->z);
 }
 

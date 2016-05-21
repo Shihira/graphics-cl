@@ -177,7 +177,7 @@ private:
      * AnyIterType can be used to initializing OtherType.
      */
     template<typename AnyIterType, int AnyStep>
-    friend class step_iterator;
+    friend struct step_iterator;
 };
 
 /*

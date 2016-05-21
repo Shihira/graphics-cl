@@ -1,15 +1,17 @@
-// cflags: -lOpenCL
+// cflags: -lOpenCL -lSDL2
 
 #include <fstream>
 #include <string>
 
 #include "../include/rasterizer.h"
+#include "../include/model.h"
+#include "../include/gui.h"
 
 using namespace std;
 using namespace gcl;
 
 string vert_shader_src = R"EOF(
-void mul_mat4_vec4(global float4* out/*row-major*/, global float4 mat4[4], float4 in)
+void mul_mat4_vec4(global float4* out/*row-major*/, global const float4 mat4[4], float4 in)
 {
     out->x = dot(mat4[0], in);
     out->y = dot(mat4[1], in);
@@ -18,9 +20,9 @@ void mul_mat4_vec4(global float4* out/*row-major*/, global float4 mat4[4], float
 }
 
 kernel void vertex_shader(
-    global float4*  AttributeVertex,
-    global float3*  AttributeNormal,
-    global float4*  UniformMatrix, // row-major
+    global const float4*  AttributeVertex,
+    global const float3*  AttributeNormal,
+    global const float4*  UniformMatrix, // row-major
     global float4*  InterpPosition,
     global float3*  InterpNormal,
     global float4*  InterpPositionWorld)
@@ -67,7 +69,7 @@ void frag_main(
     positionWorld /= positionWorld.w;
 
     float c = dot(normal, normalize(
-        (float4)(-1.5, 3, 2, 1) - positionWorld).xyz);
+        (float4)(-15, 30, 100, 1) - positionWorld).xyz);
     *color = (float4)(c, c, c, 1);
 }
 
@@ -103,45 +105,29 @@ kernel void fragment_shader(
 }
 )EOF";
 
-const cl_float4 vertices[] = {
-    cl_float4 {  1,  1,  1, 1 },
-    cl_float4 {  1,  1, -1, 1 },
-    cl_float4 {  1, -1,  1, 1 },
-    cl_float4 {  1, -1, -1, 1 },
-    cl_float4 { -1,  1,  1, 1 },
-    cl_float4 { -1,  1, -1, 1 },
-    cl_float4 { -1, -1,  1, 1 },
-    cl_float4 { -1, -1, -1, 1 },
-};
+mat4 calculate_matrix(indexed_model& m)
+{
+    // find barycenter and max
+    col4 barycenter = { 0, 0, 0, 0 };
+    float max_coord = 0;
+    for(auto v : m.attr_vertex) {
+        v /= v[3];
+        barycenter += v / v[3];
+        for(int i = 0; i < 3; i++)
+            if(max_coord < fabs(v[i])) max_coord = fabs(v[i]);
+    }
+    barycenter /= barycenter[3];
 
-const cl_float4 normals[] = {
-    cl_float4 { 1, 0, 0 },
-    cl_float4 { -1, 0, 0 },
-    cl_float4 { 0, 1, 0 },
-    cl_float4 { 0, -1, 0 },
-    cl_float4 { 0, 0, 1 },
-    cl_float4 { 0, 0, -1 },
-};
+    mat4 mat =
+        tf::perspective(M_PI / 4, 4. / 3, 10, 1000) *
+        tf::translate(col4 { 0, 0, - max_coord - 100, 1 }) *
+        tf::rotate(-M_PI / 6, tf::yOz); // *
+        //tf::translate(-barycenter);
 
-const size_t vindices[] = {
-    2, 3, 1,    1, 0, 2,
-    4, 5, 7,    7, 6, 4,
-    1, 5, 4,    4, 0, 1,
-    2, 6, 7,    7, 3, 2,
-    0, 4, 6,    6, 2, 0,
-    3, 7, 5,    5, 1, 3,
-};
+    return mat;
+}
 
-const size_t nindices[] = {
-    0, 0, 0,    0, 0, 0,
-    1, 1, 1,    1, 1, 1,
-    2, 2, 2,    2, 2, 2,
-    3, 3, 3,    3, 3, 3,
-    4, 4, 4,    4, 4, 4,
-    5, 5, 5,    5, 5, 5,
-};
-
-int main()
+int main(int argc, char** argv)
 {
     try {
 
@@ -150,8 +136,19 @@ int main()
     context ctxt(ds.back());
     context_guard cg(ctxt);
 
-    size_t num_vertices = end(vindices) - begin(vindices);
-    size_t w = 1024, h = 768;
+    std::string obj_path;
+    if(argc < 2)
+        cerr << "Please provide the path of a Wavefront OBJ." << endl;
+    else
+        obj_path = argv[1];
+
+    std::ifstream mod_src(obj_path);
+    auto mod = wavefront_loader(mod_src);
+
+    //size_t num_vertices = end(vindices) - begin(vindices);
+    size_t num_vertices = mod.attr_vertex.size();
+    //size_t num_vertices = 6;
+    size_t w = 800, h = 600;
 
     std::ifstream rast_src("../kernels/rasterizer.cl");
 
@@ -166,28 +163,19 @@ int main()
     rp.set_vertex_shader_program(vert_prg);
     rp.set_fragment_shader_program(frag_prg);
 
-    buffer<cl_float4>   AttributeVertex     (num_vertices, host_map);
-    buffer<cl_float3>   AttributeNormal     (num_vertices, host_map);
-    buffer<col4>        InterpPosition      (num_vertices, host_map);
-    buffer<col3>        InterpNormal        (num_vertices, host_map);
-    buffer<col4>        InterpPositionWorld (num_vertices, host_map);
-    buffer<row4>        UniformMatrix       (4, host_map);
+    buffer<col4>    AttributeVertex     (num_vertices, host_map);
+    buffer<col3>    AttributeNormal     (num_vertices, host_map);
+    buffer<col4>    InterpPosition      (num_vertices, host_map);
+    buffer<col3>    InterpNormal        (num_vertices, host_map);
+    buffer<col4>    InterpPositionWorld (num_vertices, host_map);
+    buffer<row4>    UniformMatrix       (4, host_map);
 
-    for(size_t i = 0; i < num_vertices; i++) {
-        AttributeVertex[i] = vertices[vindices[i]];
-        AttributeNormal[i] = normals[nindices[i]];
-    }
+    std::copy_n(mod.attr_vertex.begin(), num_vertices,
+            AttributeVertex.begin());
+    std::copy_n(mod.attr_normal.begin(), num_vertices,
+            AttributeNormal.begin());
 
-    mat4 pmat = tf::perspective(M_PI / 4, 4. / 3, 1, 10);
-    mat4 mmat = tf::identity();
-    mmat *= tf::translate(col4{ 0, 0, -3, 1 });
-    mmat *= tf::rotate(-M_PI / 6, tf::yOz);
-    mmat *= tf::rotate(-M_PI / 6, tf::zOx);
-    mat4 rmat = pmat * mmat;
-
-    cout << rmat << endl;
-    for(size_t i = 0; i < 4; i++)
-        UniformMatrix[i] = rmat.row(i);
+    mat4 rmat = calculate_matrix(mod);//pmat * mmat;
 
     rp.auto_bind_buffer(AttributeVertex    );
     rp.auto_bind_buffer(AttributeNormal    );
@@ -199,26 +187,47 @@ int main()
     promise() <<
         push(AttributeVertex) <<
         push(AttributeNormal) <<
-        push(UniformMatrix) <<
         wait_until_done;
 
-    clock_t c = clock();
-    rp.render();
-    cout << (clock() - c) / 1000.0 << endl;
-    c = clock();
-    rp.render();
-    cout << (clock() - c) / 1000.0 << endl;
+    window win("Demo", w, h);
 
-    ofstream f("./test.ppm");
-    f << "P6\n" << w << "\n" << h << "\n255\n";
-    for(size_t i = 0; i < h; i++)
-    for(size_t j = 0; j < w; j++) {
-        size_t coord = (h - i - 1) * w + j;
-        f <<
-            uint8_t(rp.gclColorBuffer[coord].s[0]) <<
-            uint8_t(rp.gclColorBuffer[coord].s[1]) <<
-            uint8_t(rp.gclColorBuffer[coord].s[2]);
-    }
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    app().register_on_paint([&]() {
+        struct timespec tmpts;
+        clock_gettime(CLOCK_REALTIME, &tmpts);
+        cout << "Interval: " << (tmpts.tv_nsec - ts.tv_nsec) / 1000000.0 << endl;
+
+        rmat = rmat * tf::rotate(M_PI / 30, tf::zOx);
+        for(size_t i = 0; i < 4; i++)
+            UniformMatrix[i] = rmat.row(i);
+
+        promise(true) <<
+            push(UniformMatrix) <<
+            wait_until_done;
+
+        rp.render(true);
+
+        clock_gettime(CLOCK_REALTIME, &tmpts);
+        cout << "Render: " << (tmpts.tv_nsec - ts.tv_nsec) / 1000000.0 << endl;
+
+        SDL_Surface* surf = win.sdl_surface();
+        SDL_LockSurface(surf);
+        uint32_t* p_end = ((uint32_t*)surf->pixels) + w * h;
+        cl_uint* dev = rp.gclPixelBuffer.device_data();
+        for(uint32_t* p = (uint32_t*)surf->pixels; p != p_end; ++p, ++dev) {
+            *p = *dev;
+        }
+        SDL_UnlockSurface(surf);
+        SDL_UpdateWindowSurface(win.sdl_window());
+
+        clock_gettime(CLOCK_REALTIME, &tmpts);
+        cout << "Sum: " << (tmpts.tv_nsec - ts.tv_nsec) / 1000000.0 << endl;
+        cout << "============================================================" << endl;
+        clock_gettime(CLOCK_REALTIME, &ts);
+    });
+
+    app().run();
 
     } catch(cl::Error e) { cout << e.what() << ' ' << e.err() << endl; }
 }
