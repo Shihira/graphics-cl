@@ -13,31 +13,28 @@
 #include <cassert>
 #include <stdexcept>
 #include <functional>
+#include <memory>
 #include <initializer_list>
 
-namespace gcl {
+#include "traits.h"
+
+namespace shrtool {
+
+namespace math {
 
 namespace detail {
 
-#define SELF (*(this->self))
+template<typename T>
+constexpr T mpl_max__(T t1, T t2) { return (t1 > t2) ? t1 : t2; }
+template<typename T>
+constexpr T mpl_min__(T t1, T t2) { return (t1 < t2) ? t1 : t2; }
 
-// NOTE: HERE BE DRAGONS! It would probably bring about an uninitialized self,
-// so watch out for nullptr exception. Need a better solution.
-template<typename ExtType>
-struct decorator_base
-{
-protected:
-    typedef ExtType extended_type;
-    ExtType* const self;
-
-    decorator_base(ExtType* s = nullptr) : self(s) {
-        if(self == nullptr)
-            throw std::runtime_error("decorator_base is uninitialized.");
-    }
-};
+#define CSELF (*(ExtType const*)(this))
+#define MSELF (*(ExtType*)(this))
+#define SELF CSELF
 
 template<typename ExtType>
-struct unequal_operator_decorator : virtual decorator_base<ExtType>
+struct unequal_operator_decorator
 {
     template<typename AnyType>
     bool operator!=(const AnyType& e) const
@@ -48,7 +45,7 @@ struct unequal_operator_decorator : virtual decorator_base<ExtType>
  * Total order compares by subtractions: ExtType opertor-(const ExtType& e);
  */
 template<typename ExtType>
-struct total_order_operator_decorator : virtual decorator_base<ExtType>
+struct total_order_operator_decorator
 {
     bool operator==(const ExtType& e) const
         { return SELF - e == 0; }
@@ -61,11 +58,11 @@ struct total_order_operator_decorator : virtual decorator_base<ExtType>
 };
 
 template<typename ExtType>
-struct plus_equal_operator_decorator : virtual decorator_base<ExtType>
+struct plus_equal_operator_decorator
 {
     template<typename DiffType>
     ExtType& operator+=(const DiffType& i)
-        { SELF = SELF + i; return SELF; }
+        { MSELF = SELF + i; return MSELF; }
 };
 
 template<typename ExtType, typename DiffType, DiffType One = 1>
@@ -73,17 +70,17 @@ struct plus_extra_operator_decorator :
     plus_equal_operator_decorator<ExtType>
 {
     ExtType operator++(int)
-        { ExtType old = SELF; SELF += One; return old; }
+        { ExtType old = SELF; MSELF += One; return old; }
     ExtType& operator++()
-        { return (SELF += One); }
+        { return (MSELF += One); }
 };
 
 template<typename ExtType>
-struct subs_equal_operator_decorator : virtual decorator_base<ExtType>
+struct subs_equal_operator_decorator
 {
     template<typename DiffType>
     ExtType& operator-=(const DiffType& i)
-        { SELF = SELF - i; return SELF; }
+        { MSELF = SELF - i; return MSELF; }
 };
 
 template<typename ExtType, typename DiffType, DiffType One = 1>
@@ -91,25 +88,25 @@ struct subs_extra_operator_decorator :
     subs_equal_operator_decorator<ExtType>
 {
     ExtType operator--(int)
-        { ExtType old = SELF; SELF -= One; return old; }
+        { ExtType old = SELF; MSELF -= One; return old; }
     ExtType& operator--()
-        { return (SELF -= One); }
+        { return (MSELF -= One); }
 };
 
 template<typename ExtType>
-struct mult_equal_operator_decorator : virtual decorator_base<ExtType>
+struct mult_equal_operator_decorator
 {
     template<typename FactorType>
     ExtType& operator*=(const FactorType& f)
-        { SELF = SELF * f; return SELF; }
+        { MSELF = SELF * f; return MSELF; }
 };
 
 template<typename ExtType>
-struct divi_equal_operator_decorator : virtual decorator_base<ExtType>
+struct divi_equal_operator_decorator
 {
     template<typename FactorType>
     ExtType& operator/=(const FactorType& f)
-        { SELF = SELF / f; return SELF; }
+        { MSELF = SELF / f; return MSELF; }
 };
 
 template<typename IterType, int Step = 1>
@@ -144,15 +141,12 @@ public:
 
     template<typename AnyIterType, int AnyStep>
     step_iterator(const step_iterator<AnyIterType, AnyStep>& i) :
-        decorator_base<step_iterator>(this),
         iter_(i.iter_) { }
 
     step_iterator(const step_iterator& i) :
-        decorator_base<step_iterator>(this),
         iter_(i.iter_) { }
 
     step_iterator(const IterType& i) :
-        decorator_base<step_iterator>(this),
         iter_(i) { }
 
     template<typename AnyIterType, int AnyStep>
@@ -204,15 +198,12 @@ struct vector_ref :
 
     template<typename AnyIter>
     vector_ref(const vector_ref<AnyIter, VecType>& t):
-        decorator_base<vector_ref>(this),
         beg_(t.beg_), end_(t.end_) { }
 
     vector_ref(const vector_ref& t):
-        decorator_base<vector_ref>(this),
         beg_(t.beg_), end_(t.end_) { }
 
     vector_ref(iterator const & b, iterator const & e) :
-        decorator_base<vector_ref>(this),
         beg_(b), end_(e) { }
 
     iterator begin() const { return beg_; }
@@ -397,8 +388,9 @@ struct matrix :
 {
 private:
     typedef std::array<T, M * N> container_type;
+    typedef std::unique_ptr<container_type> __pointer;
 
-    container_type data_;
+    __pointer data_;
 
 public:
     typedef T value_type;
@@ -414,21 +406,25 @@ public:
     static constexpr size_t cols = N;
     static constexpr bool is_vector = M == 1 || N == 1;
 
-    matrix() : decorator_base<matrix>(this)
-        { std::for_each(begin(), end(), [](T& e) { e = 0; }); }
-    matrix(const std::initializer_list<T>& l) : decorator_base<matrix>(this)
+    matrix() : data_(new container_type)
+        { std::fill(begin(), end(), 0); }
+    matrix(const std::initializer_list<T>& l)
+        : data_(new container_type)
         { std::copy(l.begin(), l.end(), begin()); }
-    matrix(const matrix& m) :
-        decorator_base<matrix>(this), data_(m.data_) { }
-    template<typename OtherT> matrix(const matrix<OtherT, M, N>& m) :
-        decorator_base<matrix>(this) { std::copy(m.begin(), m.end(), begin()); }
-    matrix(matrix&& m) :
-        decorator_base<matrix>(this), data_(std::move(m.data_)) { }
+    matrix(const matrix& m)
+        : data_(new container_type)
+        { std::copy(m.begin(), m.end(), begin()); }
+    template<typename OtherT>
+    matrix(const matrix<OtherT, M, N>& m)
+        : data_(new container_type)
+        { std::copy(m.begin(), m.end(), begin()); }
+    matrix(matrix&& m) : data_(std::move(m.data_)) { }
 
     matrix operator+(const matrix& m) const {
         matrix result;
 
-        auto dst_i = result.begin(), src1_i = m.begin(), src2_i = begin();
+        auto dst_i = result.begin();
+        auto src1_i = m.begin(), src2_i = begin();
         for(; dst_i != result.end() && src1_i != m.end() && src2_i != m.end();
                 ++dst_i, ++src1_i, ++src2_i)
             *dst_i = *src1_i + *src2_i;
@@ -436,12 +432,16 @@ public:
         return result;
     }
 
+    value_type* data() { return data_->data(); }
+    const value_type* data() const { return data_->data(); }
+
     template<typename Numeric> typename std::enable_if<
         std::is_arithmetic<Numeric>::value, matrix>::type
     operator*(Numeric n) const {
         matrix result;
 
-        auto dst_i = result.begin(), src_i = begin();
+        auto dst_i = result.begin();
+        auto src_i = begin();
         for(; dst_i != result.end() && src_i != end(); ++dst_i, ++src_i)
             *dst_i = *src_i * n;
 
@@ -467,7 +467,8 @@ public:
     operator/(Numeric n) const {
         matrix result;
 
-        auto dst_i = result.begin(), src_i = begin();
+        auto dst_i = result.begin();
+        auto src_i = begin();
         for(; dst_i != result.end() && src_i != end(); ++dst_i, ++src_i)
             *dst_i = *src_i / n;
 
@@ -475,19 +476,26 @@ public:
     }
 
     /*
-     * Row-major order iterator
+     * row-major order iterator
      */
-    iterator begin() { return data_.begin(); }
-    iterator end() { return data_.end(); }
+    iterator begin() { return data_->begin(); }
+    iterator end() { return data_->end(); }
 
-    const_iterator begin() const { return data_.begin(); }
-    const_iterator end() const { return data_.end(); }
+    const_iterator begin() const { return data_->begin(); }
+    const_iterator end() const { return data_->end(); }
 
-    const_iterator cbegin() const { return data_.cbegin(); }
-    const_iterator cend() const { return data_.cend(); }
+    const_iterator cbegin() const { return data_->cbegin(); }
+    const_iterator cend() const { return data_->cend(); }
 
-    matrix& operator=(const matrix& m) { data_ = m.data_; return *this; }
-    matrix& operator=(matrix&& m) { data_ = std::move(m.data_); return *this; }
+    matrix& operator=(const matrix& m) {
+        std::copy(m.begin(), m.end(), begin());
+        return *this;
+    }
+
+    matrix& operator=(matrix&& m) {
+        data_ = std::move(m.data_);
+        return *this;
+    }
 
     
     auto operator[](size_t i) -> decltype(
@@ -500,8 +508,8 @@ public:
         return matrix_subscript_<const matrix, is_vector>::subscript(this, i);
     }
 
-    value_type& at(size_t r, size_t c) { return data_[r * cols + c]; }
-    const value_type& at(size_t r, size_t c) const { return data_[r * cols + c]; }
+    value_type& at(size_t r, size_t c) { return data()[r * cols + c]; }
+    const value_type& at(size_t r, size_t c) const { return data()[r * cols + c]; }
 
     col_ref col(size_t i) {
         return col_ref(
@@ -539,15 +547,73 @@ public:
             if(*s_i != *m_i) return false;
         return true;
     }
+
+    bool close(const matrix& m, value_type bias) const {
+        auto s_i = begin(), m_i = m.begin();
+        for(; s_i != end() && m_i != m.end(); ++s_i, ++m_i) {
+            value_type res = *s_i - *m_i;
+            if(res > value_type(0) && res > bias) return false;
+            if(res < value_type(0) && res < -bias) return false;
+        }
+        return true;
+    }
+
+    template<typename Mat>
+    Mat cutdown() const {
+        Mat new_mat;
+        for(size_t m = 0; m < mpl_min__(Mat::rows, rows); m++)
+            for(size_t n = 0; n < mpl_min__(Mat::cols, cols); n++)
+                new_mat.at(m, n) = at(m, n);
+        return new_mat;
+    }
 };
 
+template<typename T>
+struct is_matrix : std::false_type { };
+template<typename T, size_t M, size_t N>
+struct is_matrix<matrix<T, M, N>> : std::true_type { };
+
+template<typename T, size_t M, size_t N>
+std::ostream& operator<<(std::ostream& s, const matrix<T, M, N>& mat) {
+    for(size_t m = 0; m < M; m++) {
+        for(size_t n = 0; n < N; n++)
+            s <<
+                (n == 0 ? (m == 0 ? "[ " : "  ") : "") <<
+                mat.at(m, n) <<
+                (n == N - 1 ? (m == M - 1 ? " ]" : ";\n") : ",\t");
+    }
+    return s;
 }
+
+template<typename T, size_t M>
+std::ostream& operator<<(std::ostream& s, const matrix<T, M, 1>& mat) {
+    for(size_t m = 0; m < M; m++) {
+        s <<
+            (m == 0 ? "[ " : "") <<
+            mat.at(m, 0) <<
+            (m == M - 1 ? " ]ᵀ" : ",\t");
+    }
+    return s;
+}
+
+template<typename IterType, typename VecType>
+std::ostream& operator<<(std::ostream& s,
+        const vector_ref<IterType, VecType>& v) {
+    return operator<<(s, VecType(v));
+}
+
+#undef CSELF
+#undef SSELF
+
+}
+
+static constexpr double PI = 3.141592653589793;
 
 template<typename IterType, typename VecType>
 using vector_ref = detail::vector_ref<IterType, VecType>;
 
-template<typename ValueType, size_t Rows, size_t Cols>
-using matrix = detail::matrix<ValueType, Rows, Cols>;
+template<typename ValueType, size_t rows, size_t cols>
+using matrix = detail::matrix<ValueType, rows, cols>;
 
 typedef matrix<double, 4, 4> mat4;
 typedef matrix<double, 3, 3> mat3;
@@ -556,6 +622,14 @@ typedef matrix<double, 1, 1> mat1;
 typedef matrix<double, 4, 5> mat45;
 typedef matrix<double, 3, 4> mat34;
 typedef matrix<double, 2, 3> mat23;
+
+typedef matrix<float, 4, 4> fmat4;
+typedef matrix<float, 3, 3> fmat3;
+typedef matrix<float, 2, 2> fmat2;
+typedef matrix<float, 1, 1> fmat1;
+typedef matrix<float, 4, 5> fmat45;
+typedef matrix<float, 3, 4> fmat34;
+typedef matrix<float, 2, 3> fmat23;
 
 template<typename T, size_t M>
 using col = matrix<T, M, 1>;
@@ -572,6 +646,26 @@ typedef row<double, 3> row3;
 typedef row<double, 2> row2;
 typedef row<double, 1> row1;
 
+typedef col<float, 4> fcol4;
+typedef col<float, 3> fcol3;
+typedef col<float, 2> fcol2;
+typedef col<float, 1> fcol1;
+
+typedef row<float, 4> frow4;
+typedef row<float, 3> frow3;
+typedef row<float, 2> frow2;
+typedef row<float, 1> frow1;
+
+typedef col<int32_t, 4> icol4;
+typedef col<int32_t, 3> icol3;
+typedef col<int32_t, 2> icol2;
+typedef col<int32_t, 1> icol1;
+
+typedef row<int32_t, 4> irow4;
+typedef row<int32_t, 3> irow3;
+typedef row<int32_t, 2> irow2;
+typedef row<int32_t, 1> irow1;
+
 template<typename T, size_t M, size_t N>
 typename std::enable_if<M == 1 || N == 1, double>::type
 norm(const matrix<T, M, N>& m) {
@@ -584,6 +678,19 @@ template<typename IterType, typename VecType>
 double norm(const vector_ref<IterType, VecType>& v) {
     return std::sqrt(v * v);
 }
+
+template<typename T, size_t M, size_t N>
+matrix<T, N, M> transpose(const matrix<T, M, N>& m_) {
+    matrix<T, N, M> new_m;
+
+    for(size_t m = 0; m < M; m++)
+        for(size_t n = 0; n < N; n++) {
+            new_m.at(n, m) = m_.at(m, n);
+        }
+
+    return new_m;
+}
+
 
 template<typename T, size_t M, size_t N>
 typename std::enable_if<M == N, T>::type
@@ -619,34 +726,163 @@ det(const matrix<T, M, N>& m_) {
     return res / times;
 }
 
-template<typename T, size_t M, size_t N>
-std::ostream& operator<<(std::ostream& s, const matrix<T, M, N>& mat) {
-    for(size_t m = 0; m < M; m++) {
-        for(size_t n = 0; n < N; n++)
-            s <<
-                (n == 0 ? (m == 0 ? "[ " : "  ") : "") <<
-                mat.at(m, n) <<
-                (n == N - 1 ? (m == M - 1 ? " ]" : ";\n") : ",\t");
-    }
-    return s;
-}
-
 template<typename T, size_t M>
-std::ostream& operator<<(std::ostream& s, const matrix<T, M, 1>& mat) {
-    for(size_t m = 0; m < M; m++) {
-        s <<
-            (m == 0 ? "[ " : "") <<
-            mat.at(m, 0) <<
-            (m == M - 1 ? " ]ᵀ" : ",\t");
-    }
-    return s;
+const matrix<T, M, M>
+inverse(const matrix<T, M, M>& m_) {
+    T det_val(det(m_));
+
+    if(!det_val)
+        throw std::logic_error("Attempted to find"
+            "inversion of a singular matrix");
+
+    matrix<T, M, M> adjugate;
+
+    for(size_t m = 0; m < M; m++)
+        for(size_t n = 0; n < M; n++) {
+            matrix<T, M-1, M-1> minor;
+
+            for(size_t i = 0, mnr_i = 0; i < M; i++) {
+                if(i == m) continue;
+                for(size_t j = 0, mnr_j = 0; j < M; j++) {
+                    if(j == n) continue;
+
+                    minor.at(mnr_i, mnr_j) = m_.at(i, j);
+
+                    mnr_j += 1;
+                }
+                mnr_i += 1;
+            }
+            adjugate.at(m, n) = det(minor) *
+                (((m + n) % 2) ? -1 : 1);
+        }
+
+    return transpose(adjugate) / det_val;
 }
 
-template<typename IterType, typename VecType>
-std::ostream& operator<<(std::ostream& s,
-        const vector_ref<IterType, VecType>& v) {
-    return operator<<(s, VecType(v));
+template<typename T, size_t M, size_t N, size_t P, size_t Q>
+typename std::enable_if<
+    detail::mpl_min__(M, N) == 1 && detail::mpl_min__(P, Q) &&
+    detail::mpl_max__(M, N) == detail::mpl_max__(P, Q), T>::type
+dot(const matrix<T, M, N>& v1, const matrix<T, P, Q>& v2) {
+    T sum(0);
+    for(auto i1 = v1.begin(), i2 = v2.begin(); i1 != v1.end(); ++i1, ++i2)
+        sum += (*i1) * (*i2);
+    return sum;
 }
+
+template<typename T, size_t M, size_t N, size_t P, size_t Q>
+typename std::enable_if<
+    detail::mpl_min__(M, N) == 1 && detail::mpl_min__(P, Q) &&
+    detail::mpl_max__(M, N) == 3 && detail::mpl_max__(P, Q) == 3,
+    col<T, 3>>::type
+cross(const matrix<T, M, N>& v1, const matrix<T, P, Q>& v2) {
+    col3 res;
+    res[0] = det(mat2{
+            v1[1], v1[2],
+            v2[1], v2[2],
+        });
+    res[1] = -det(mat2{
+            v1[0], v1[2],
+            v2[0], v2[2],
+        });
+    res[2] = det(mat2{
+            v1[0], v1[1],
+            v2[0], v2[1],
+        });
+    return res;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// dynmatrix: not useful c++ natively, mostly used in reflection
+
+template<typename T>
+struct dynmatrix {
+    typedef T value_type;
+
+    dynmatrix() { }
+    dynmatrix(size_t rows, size_t cols) {
+        assign(rows, cols);
+    }
+    dynmatrix(size_t rows, size_t cols,
+            const std::initializer_list<value_type>& d) {
+        assign(rows, cols);
+        std::copy(d.begin(), d.end(), data_);
+    }
+    dynmatrix(const dynmatrix& d) {
+        assign(d.rows_, d.cols_);
+        std::copy(d.data_, d.data_ + d.elem_count(), data_);
+    }
+    dynmatrix(dynmatrix&& d) :
+        rows_(d.rows_), cols_(d.cols_) {
+        std::swap(d.data_, data_);
+        std::swap(d.is_agent_, is_agent_);
+    }
+    template<size_t M, size_t N>
+    dynmatrix(const matrix<T, M, N>& m) {
+        assign(M, N);
+        std::copy(m.begin(), m.end(), data_);
+    }
+
+    void assign(size_t rows, size_t cols) {
+        if(data_) delete[] data_;
+        cols_ = cols;
+        rows_ = rows;
+        data_ = new value_type[cols * rows];
+    }
+
+    ~dynmatrix() {
+        if(data_ && !is_agent_) delete[] data_;
+    }
+
+    value_type* data() { return data_; }
+    const value_type* data() const { return data_; }
+    value_type& at(size_t r, size_t c) {
+        return data_[r * cols_ + c];
+    }
+    const value_type& at(size_t r, size_t c) const {
+        return data_[r * cols_ + c];
+    }
+
+    operator bool() const {
+        return data_;
+    }
+
+    static dynmatrix agent(size_t r, size_t c, value_type* v) {
+        dynmatrix mat;
+        mat.rows_ = r; mat.cols_ = c; mat.data_ = v;
+        mat.is_agent_ = true;
+
+        return std::move(mat);
+    }
+
+    template<size_t M, size_t N>
+    static dynmatrix agent(matrix<value_type, M, N>& m) {
+        return agent(m.rows, m.cols, m.data());
+    }
+
+    template<size_t M, size_t N>
+    operator matrix<value_type, M, N>() const {
+        matrix<value_type, M, N> m;
+        std::copy(data_, data_ + elem_count(), m.begin());
+        return std::move(m);
+    }
+
+    size_t rows() const { return rows_; }
+    size_t cols() const { return cols_; }
+    size_t elem_count() const { return cols_ * rows_; }
+
+private:
+    size_t rows_ = 0;
+    size_t cols_ = 0;
+
+    value_type* data_ = nullptr;
+    bool is_agent_ = false;
+};
+
+typedef dynmatrix<float> fxmat;
+typedef dynmatrix<double> dxmat;
+
+////////////////////////////////////////////////////////////////////////////////
 
 namespace tf {
 
@@ -663,24 +899,25 @@ inline matrix<T, 4, 4> diagonal(col<T, 4> diag)
     };
 }
 
-inline mat4 rotate(double a, plane p)
+template<typename T = double>
+inline matrix<T, 4, 4> rotate(double a, plane p)
 {
     if(p == xOy)
-        return mat4 {
+        return matrix<T, 4, 4> {
             cos(a),-sin(a), 0, 0,
             sin(a), cos(a), 0, 0,
             0,      0,      1, 0,
             0,      0,      0, 1,
         };
     else if(p == yOz)
-        return mat4 {
+        return matrix<T, 4, 4> {
             1, 0,      0,      0,
             0, cos(a), sin(a), 0,
             0,-sin(a), cos(a), 0,
             0, 0,      0,      1,
         };
     else
-        return mat4 {
+        return matrix<T, 4, 4> {
             cos(a), 0,-sin(a), 0,
             0,      1, 0,      0,
             sin(a), 0, cos(a), 0,
@@ -700,6 +937,17 @@ inline matrix<T, 4, 4> translate(col<T, 4> t)
 }
 
 template<typename T = double>
+inline matrix<T, 4, 4> translate(col<T, 3> t)
+{
+    return matrix<T, 4, 4> {
+        1, 0,    0,    t[0],
+        0,    1, 0,    t[1],
+        0,    0,    1, t[2],
+        0,    0,    0,    1,
+    };
+}
+
+template<typename T = double>
 inline matrix<T, 4, 4> scale(T x, T y, T z)
     { return diagonal({x, y, z, 1}); }
 
@@ -707,11 +955,12 @@ template<typename T = double>
 inline matrix<T, 4, 4> identity()
     { return diagonal({1, 1, 1, 1}); }
 
-inline mat4 perspective(double fov, double wh, double zn, double zf)
+template<typename T = double>
+inline matrix<T, 4, 4> perspective(double fov, double wh, double zn, double zf)
 {
     double f = 1 / tan(fov);
     double c = zn - zf;
-    return mat4 {
+    return matrix<T, 4, 4> {
         f / wh, 0, 0, 0,
         0, f, 0, 0,
         0, 0, (zn + zf) / c, 2 * zn * zf / c,
@@ -719,8 +968,118 @@ inline mat4 perspective(double fov, double wh, double zn, double zf)
     };
 }
 
+template<typename T = double>
+inline matrix<T, 4, 4> orthographic(
+        double l, double r,
+        double t, double b,
+        double n, double f)
+{
+    double  r_l = r - l,
+            t_b = t - b,
+            f_n = f - n;
+    return matrix<T, 4, 4> {
+        2/r_l, 0, 0, -(r+l)/r_l,
+        0, 2/t_b, 0, -(t+b)/t_b,
+        0, 0, 2/f_n, -(f+n)/f_n,
+        0, 0, 0, 1,
+    };
 }
 
-}
+} // tf
+
+} // math
+
+////////////////////////////////////////////////////////////////////////////////
+// traits
+
+template<typename T, size_t M, size_t N>
+struct item_trait<math::matrix<T, M, N>>
+{
+    typedef float value_type;
+    static constexpr size_t size() {
+        return M * N * sizeof(value_type);
+    }
+    static constexpr size_t align() {
+        return item_trait<math::col<value_type, M>>::align();
+    }
+
+    static void copy(const math::matrix<T, M, N>& m, value_type* buf) {
+        for(size_t n = 0; n < N; ++n, buf += M) {
+            const auto& c = m.col(n);
+            std::copy(c.begin(), c.end(), buf);
+        }
+    }
+
+    static const char* glsl_type_name() {
+        static const char name_[] = {
+            'm', 'a', 't', M + '0',
+            M == N ? '\0' : 'x', N + '0', '\0' };
+        return name_;
+    }
+};
+
+template<typename T, size_t M>
+struct item_trait<math::matrix<T, M, 1>>
+{
+    typedef T value_type;
+    static constexpr size_t size() {
+        return M * sizeof(value_type);
+    }
+    static constexpr size_t align() {
+        return (M < 3 ? M : 4) * sizeof(value_type);
+    }
+
+    static void copy(const math::col<T, M>& c, value_type* buf) {
+        std::copy(c.begin(), c.end(), buf);
+    }
+
+    static const char* glsl_type_name() {
+        static const char name_[] = {
+            std::is_same<value_type, uint8_t>::value ? 'b' :
+            std::is_same<value_type, int>::value ? 'i' :
+            std::is_same<value_type, double>::value ? 'd' : '\0',
+            'v', 'e', 'c', M + '0', '\0' };
+        static const char* name_p = name_[0] ? name_ : name_ + 1;
+
+        return name_p;
+    }
+};
+
+template<typename T>
+struct item_trait<math::dynmatrix<T>>
+{
+    typedef T value_type;
+    static size_t size(const math::dynmatrix<T>& m) {
+        return sizeof(value_type) * m.elem_count();
+    }
+    static size_t align(const math::dynmatrix<T>& m) {
+        size_t r = m.rows();
+        return sizeof(value_type) * (r < 3 ? r : 4);
+    }
+    static void copy(const math::dynmatrix<T>& m, value_type* buf) {
+        for(size_t i = 0; i < m.cols(); i++) {
+            for(size_t j = 0; j < m.rows(); j++) {
+                *(buf++) = m.at(j, i);
+            }
+        }
+    }
+    static std::string glsl_type_name(const math::dynmatrix<T>& m) {
+        const char* tc =
+            std::is_same<value_type, uint8_t>::value ? "b" :
+            std::is_same<value_type, int>::value ? "i" :
+            std::is_same<value_type, double>::value ? "d" : "";
+
+        if(m.cols() == 1) {
+            return std::string(tc) +
+                std::string("vec") + std::to_string(m.rows());
+        } else {
+            return std::string(tc) +
+                std::string("mat") + std::to_string(m.rows()) +
+                "x" + std::to_string(m.cols());
+        }
+    }
+};
+
+} // shrtool
 
 #endif // MATRIX_H_INCLUDED

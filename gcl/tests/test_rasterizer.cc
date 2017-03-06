@@ -2,8 +2,8 @@
 
 #include <fstream>
 
-#include "../include/promise.h"
-#include "../include/test.h"
+#include "promise.h"
+#include "common/unit_test.h"
 
 using namespace std;
 using namespace gcl;
@@ -86,7 +86,7 @@ struct mark_scanline_fixture : kernel_fixture {
     }
 };
 
-def_test_case_with_fixture(mark_scanline_small_triangle, mark_scanline_fixture) {
+TEST_CASE_FIXTURE(mark_scanline_small_triangle, mark_scanline_fixture) {
     buffer<col4> InterpPosition {
         col4 { -.2, 0.4, -.1, 1 },
         col4 { 0.1, -.6, 0.5, 1 },
@@ -106,7 +106,7 @@ def_test_case_with_fixture(mark_scanline_small_triangle, mark_scanline_fixture) 
     }
 }
 
-def_test_case_with_fixture(mark_scanline_joint_triangle, mark_scanline_fixture) {
+TEST_CASE_FIXTURE(mark_scanline_joint_triangle, mark_scanline_fixture) {
     vector<col4> buf;
 
     buffer<col4> InterpPosition_1 {
@@ -138,7 +138,7 @@ def_test_case_with_fixture(mark_scanline_joint_triangle, mark_scanline_fixture) 
     }
 }
 
-def_test_case_with_fixture(mark_scanline_big_triangle, mark_scanline_fixture) {
+TEST_CASE_FIXTURE(mark_scanline_big_triangle, mark_scanline_fixture) {
     buffer<col4> InterpPosition {
         col4 { -.2, 0.4, -.1, 1 },
         col4 { 0.1, -.6, 0.5, 1 },
@@ -194,7 +194,7 @@ struct fill_scanline_fixture : kernel_fixture {
     }
 };
 
-def_test_case_with_fixture(fill_single_scanline, fill_scanline_fixture) {
+TEST_CASE_FIXTURE(fill_single_scanline, fill_scanline_fixture) {
     buffer<col4> gclMarkPos {
         col4 { 21.20, 2, 0, 1 },
         col4 { 52.18, 2, 0, 1 },
@@ -217,7 +217,7 @@ def_test_case_with_fixture(fill_single_scanline, fill_scanline_fixture) {
     }
 }
 
-def_test_case(double_floating_point_comparison) {
+TEST_CASE(double_floating_point_comparison) {
     std::vector<double> doubles {
         -19.054817824216737, -6.80421153560839, -9.278101722725665,
         -17.18510762126227, 1.4881675474870475, -7.998945239584955,
@@ -275,7 +275,7 @@ struct depth_test_fixture : kernel_fixture {
     }
 };
 
-def_test_case_with_fixture(depth_test, depth_test_fixture) {
+TEST_CASE_FIXTURE(depth_test, depth_test_fixture) {
     buffer<col4> gclFragPos {
         col4 { 2, 3, 0.6, 1 },
         col4 { 50, 50, 0.2, 1 },
@@ -291,7 +291,7 @@ def_test_case_with_fixture(depth_test, depth_test_fixture) {
     assert_true(gclDepthBuffer[50 * 200 + 50] == gclFragPos[4][2]);
 }
 
-int main()
+int main(int argc, char** argv)
 {
     std::vector<platform> ps = platform::get();
     std::vector<device> ds = device::get(ps);
@@ -299,10 +299,6 @@ int main()
     context ctxt(ds.back());
     context_guard cg(ctxt);
 
-    typedef comput_error_handler<default_error_handler> error_handler;
-    test_case::test_all<error_handler>(true);
-    cout << test_case::log().str();
-
-    return test_case::status() ? 0 : -1;
+    return shrtool::unit_test::test_main(argc, argv);
 }
 

@@ -1,12 +1,12 @@
 // cflags: -lOpenCL
 
-#include "../include/promise.h"
-#include "../include/test.h"
+#include "promise.h"
+#include "common/unit_test.h"
 
 using namespace std;
 using namespace gcl;
 
-def_test_case(check_devices) {
+TEST_CASE(check_devices) {
     std::vector<platform> ps = platform::get();
 
     for(platform& p : ps) {
@@ -44,7 +44,7 @@ struct sum_up_program_fixture {
     }
 };
 
-def_test_case(kernel_test_assingment) {
+TEST_CASE(kernel_test_assingment) {
     program prg = compile(R"EOF(
     kernel void fun(global uint* buf)
     {
@@ -72,7 +72,7 @@ def_test_case(kernel_test_assingment) {
         assert_true(i == s[i]);
 }
 
-def_test_case(kernel_test_reflection) {
+TEST_CASE(kernel_test_reflection) {
     program prg = compile(R"EOF(
     typedef float4 pos_t;
     kernel void fun(
@@ -102,7 +102,7 @@ def_test_case(kernel_test_reflection) {
     assert_true(krn.getArgInfo<CL_KERNEL_ARG_TYPE_NAME>(2) == "pos_t*");
 }
 
-def_test_case_with_fixture(kernel_test_sum_up, sum_up_program_fixture) {
+TEST_CASE_FIXTURE(kernel_test_sum_up, sum_up_program_fixture) {
     set_buffer();
 
     fill(s.begin(), s.end(), 1);
@@ -120,7 +120,7 @@ def_test_case_with_fixture(kernel_test_sum_up, sum_up_program_fixture) {
     assert_true(krn.getInfo<CL_KERNEL_NUM_ARGS>() == 2);
 }
 
-def_test_case_with_fixture(command_queue_run_lambda, sum_up_program_fixture) {
+TEST_CASE_FIXTURE(command_queue_run_lambda, sum_up_program_fixture) {
     set_buffer();
 
     r[0] = 0;
@@ -147,7 +147,7 @@ def_test_case_with_fixture(command_queue_run_lambda, sum_up_program_fixture) {
     assert_true(second_lambda_passed);
 }
 
-def_test_case_with_fixture(kernel_event_listener, sum_up_program_fixture) {
+TEST_CASE_FIXTURE(kernel_event_listener, sum_up_program_fixture) {
     set_buffer();
 
     cl_uint s_val = 3;
@@ -189,7 +189,7 @@ def_test_case_with_fixture(kernel_event_listener, sum_up_program_fixture) {
     assert_true(result[2] == (50000 + 499 * 500 / 2));
 }
 
-def_test_case(pipeline_buf_krn_bindings) {
+TEST_CASE(pipeline_buf_krn_bindings) {
     program prg = compile(R"EOF(
     typedef float4 pos_t;
     kernel void find_max(global int* buf_f, global int* most_f) {
@@ -246,7 +246,7 @@ def_test_case(pipeline_buf_krn_bindings) {
     assert_true(most_f[1] == buf_f[46]);
 }
 
-int main()
+int main(int argc, char** argv)
 {
     std::vector<platform> ps = platform::get();
     std::vector<device> ds = device::get(ps);
@@ -254,10 +254,6 @@ int main()
     context ctxt(ds.back());
     context_guard cg(ctxt);
 
-    typedef comput_error_handler<default_error_handler> error_handler;
-    test_case::test_all<error_handler>(true);
-    cout << test_case::log().str();
-
-    return test_case::status() ? 0 : -1;
+    shrtool::unit_test::test_main(argc, argv);
 }
 

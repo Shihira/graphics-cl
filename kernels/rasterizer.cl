@@ -90,10 +90,12 @@ void extract_quad(
         quad_inf[2] += ratio * comp_max + (1-ratio) * comp_min;
         quad_pos[1] = triangle[idx[1]];
         quad_pos[2] = breakpoint;
+        quad_pos[2].x += 1;
     } else {
         quad_inf[1] += ratio * comp_max + (1-ratio) * comp_min;
         quad_inf[2] += comp_mid;
         quad_pos[1] = breakpoint;
+        quad_pos[1].x -= 1;
         quad_pos[2] = triangle[idx[1]];
     }
 }
@@ -151,13 +153,14 @@ kernel void mark_scanline(
     };
 
     for(int i = 0; i < 3; i++) {
-        triangle[i] /= triangle[i].w;
+        triangle[i] /= fabs(triangle[i].w);
         triangle[i].x *= gclViewport[VP_WIDTH] / 2;
         triangle[i].x += gclViewport[VP_LEFT] + gclViewport[VP_WIDTH] / 2;
         triangle[i].y *= gclViewport[VP_HEIGHT] / 2;
         triangle[i].y += gclViewport[VP_TOP] + gclViewport[VP_HEIGHT] / 2;
         triangle[i].z *= 0.5;
         triangle[i].z += 0.5;
+        triangle[i].w = 1;
     }
 
     size_t idx[3];

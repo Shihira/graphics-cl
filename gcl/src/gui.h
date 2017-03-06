@@ -4,6 +4,8 @@
 #include <string>
 #include <stdexcept>
 #include <functional>
+#include <chrono>
+#include <iostream>
 
 #include <SDL2/SDL.h>
 
@@ -123,6 +125,9 @@ public:
         int timer = SDL_AddTimer(1000 / fps_, paint_timer_cb_, NULL);
         uint32_t tick = SDL_GetTicks();
 
+        uint32_t fps_counter = 0;
+        auto last_fc_time = std::chrono::system_clock::now();
+
         while(true) {
             int has_event = SDL_WaitEvent(&e);
             if(!has_event) break;
@@ -159,6 +164,18 @@ public:
                         uint32_t d_tick = (SDL_GetTicks() - tick) / 16;
                         _on_paint();
                         tick += d_tick * 16;
+
+                        // FPS counter
+                        fps_counter += 1;
+                        auto dur = std::chrono::system_clock::now() -
+                            last_fc_time;
+                        if(std::chrono::duration_cast<
+                                std::chrono::seconds>(dur).count() >= 1) {
+                            //std::cerr << fps_counter << std::endl;
+                            fps_counter = 0;
+                            last_fc_time = std::chrono::system_clock::now();
+                        }
+
                     }
                 }
             }

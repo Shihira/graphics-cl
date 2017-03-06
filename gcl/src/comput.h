@@ -1,7 +1,7 @@
 #ifndef COMPUT_H_INCLUDED
 #define COMPUT_H_INCLUDED
 
-#include "matrix.h"
+#include "common/matrix.h"
 
 #define __CL_ENABLE_EXCEPTIONS
 
@@ -21,6 +21,8 @@
 #include <map>
 
 namespace gcl {
+
+using namespace shrtool::math;
 
 typedef cl::Event event;
 typedef cl::Program program;

@@ -3,12 +3,14 @@
 #include <fstream>
 #include <string>
 
-#include "../include/rasterizer.h"
-#include "../include/model.h"
-#include "../include/gui.h"
+#include "rasterizer.h"
+#include "common/mesh.h"
+#include "common/exception.h"
+#include "gui.h"
 
 using namespace std;
 using namespace gcl;
+using namespace shrtool;
 
 string vert_shader_src = R"EOF(
 void mul_mat4_vec4(global float4* out/*row-major*/, global const float4 mat4[4], float4 in)
@@ -36,7 +38,6 @@ kernel void vertex_shader(
     AttributeNormal += item_id;
 
     mul_mat4_vec4(InterpPosition, UniformMatrix, *AttributeVertex);
-    *InterpPosition /= InterpPosition->w;
     *InterpNormal = *AttributeNormal;
     *InterpPositionWorld = *AttributeVertex;
 }
@@ -69,7 +70,7 @@ void frag_main(
     positionWorld /= positionWorld.w;
 
     float c = dot(normal, normalize(
-        (float4)(-15, 30, 100, 1) - positionWorld).xyz);
+        (float4)(-100, 100, 150, 1) - positionWorld).xyz);
     *color = (float4)(c, c, c, 1);
 }
 
@@ -105,22 +106,22 @@ kernel void fragment_shader(
 }
 )EOF";
 
-mat4 calculate_matrix(indexed_model& m)
+mat4 calculate_matrix(mesh_indexed& m)
 {
     // find barycenter and max
     col4 barycenter = { 0, 0, 0, 0 };
     float max_coord = 0;
-    for(auto v : m.attr_vertex) {
+    for(auto v : m.positions) {
         v /= v[3];
         barycenter += v / v[3];
-        for(int i = 0; i < 3; i++)
-            if(max_coord < fabs(v[i])) max_coord = fabs(v[i]);
+        float coord = norm(v);
+        if(coord > max_coord) max_coord = coord;
     }
     barycenter /= barycenter[3];
 
     mat4 mat =
         tf::perspective(M_PI / 4, 4. / 3, 10, 1000) *
-        tf::translate(col4 { 0, 0, - max_coord - 100, 1 }) *
+        tf::translate(col4 { 0, 0, - max_coord, 1 }) *
         tf::rotate(-M_PI / 6, tf::yOz); // *
         //tf::translate(-barycenter);
 
@@ -137,16 +138,21 @@ int main(int argc, char** argv)
     context_guard cg(ctxt);
 
     std::string obj_path;
-    if(argc < 2)
+    if(argc < 2) {
         cerr << "Please provide the path of a Wavefront OBJ." << endl;
-    else
+        return -1;
+    } else
         obj_path = argv[1];
 
     std::ifstream mod_src(obj_path);
-    auto mod = wavefront_loader(mod_src);
+    auto mods = mesh_io_object::load(mod_src);
+
+    if(mods.size() < 1)
+        throw restriction_error("Failed to load model from " + obj_path);
+    auto& mod = mods[0];
 
     //size_t num_vertices = end(vindices) - begin(vindices);
-    size_t num_vertices = mod.attr_vertex.size();
+    size_t num_vertices = mod.vertices();
     //size_t num_vertices = 6;
     size_t w = 800, h = 600;
 
@@ -170,12 +176,16 @@ int main(int argc, char** argv)
     buffer<col4>    InterpPositionWorld (num_vertices, host_map);
     buffer<row4>    UniformMatrix       (4, host_map);
 
-    std::copy_n(mod.attr_vertex.begin(), num_vertices,
+    std::copy_n(mod.positions.begin(), num_vertices,
             AttributeVertex.begin());
-    std::copy_n(mod.attr_normal.begin(), num_vertices,
+    std::copy_n(mod.normals.begin(), num_vertices,
             AttributeNormal.begin());
 
     mat4 rmat = calculate_matrix(mod);//pmat * mmat;
+    cerr <<
+        tf::perspective(M_PI / 4, 4. / 3, 5, 20) <<
+        tf::perspective(M_PI / 4, 4. / 3, 5, 20) * col4 { 1, 2, 10, 1 } <<
+        endl;
 
     rp.auto_bind_buffer(AttributeVertex    );
     rp.auto_bind_buffer(AttributeNormal    );
