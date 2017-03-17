@@ -2,8 +2,6 @@
  * Copyright(C) Shihira Fung, 2016 <fengzhiping@hotmail.com>
  */
 
-#pragma OPENCL EXTENSION cl_khr_int64_base_atomics: enable
-
 #define swap_(t, a, b) { t temp = a; a = b; b = temp; }
 
 #define in          __global const

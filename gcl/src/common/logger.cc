@@ -46,7 +46,7 @@ abstract_logger& logger_manager::get_by_level(size_t lvl)
 logger_manager::logger_manager(bool leave_empty)
 {
     if(leave_empty) return;
-    current_level_ = INFO;
+    current_level_ = LOG_INFO;
 
     if(char* env = std::getenv(LOG_ENV)) {
         if(*env && *env >= '0' && *env <= '9') // only check the head
@@ -55,11 +55,11 @@ logger_manager::logger_manager(bool leave_empty)
 
 #define REG_LOG(lvl, type) ls_.set_level_logger(lvl, \
         std::shared_ptr<abstract_logger>(new type##_logger())).set_name(#lvl);
-    REG_LOG(DEBUG, stdout);
-    REG_LOG(INFO, stdout);
-    REG_LOG(WARNING, stderr);
-    REG_LOG(ERROR, stderr);
-    REG_LOG(FATAL, stderr);
+    REG_LOG(LOG_DEBUG, stdout);
+    REG_LOG(LOG_INFO, stdout);
+    REG_LOG(LOG_WARNING, stderr);
+    REG_LOG(LOG_ERROR, stderr);
+    REG_LOG(LOG_FATAL, stderr);
 #undef REG_LOG
 }
 

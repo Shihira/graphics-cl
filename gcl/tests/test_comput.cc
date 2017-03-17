@@ -1,7 +1,11 @@
 // cflags: -lOpenCL
 
+#define EXPOSE_EXCEPTION
+
 #include "promise.h"
 #include "common/unit_test.h"
+
+#include "test_utils.h"
 
 using namespace std;
 using namespace gcl;
@@ -92,14 +96,14 @@ TEST_CASE(kernel_test_reflection) {
 
     kernel krn(prg, "fun");
 
-    assert_true(prg.getInfo<CL_PROGRAM_KERNEL_NAMES>() == "fun;fun2");
-    assert_true(krn.getInfo<CL_KERNEL_NUM_ARGS>() == 3);
-    assert_true(krn.getArgInfo<CL_KERNEL_ARG_NAME>(0) == "var1");
-    assert_true(krn.getArgInfo<CL_KERNEL_ARG_TYPE_NAME>(0) == "uint*");
-    assert_true(krn.getArgInfo<CL_KERNEL_ARG_NAME>(1) == "var2");
-    assert_true(krn.getArgInfo<CL_KERNEL_ARG_TYPE_NAME>(1) == "float4*");
-    assert_true(krn.getArgInfo<CL_KERNEL_ARG_NAME>(2) == "var3");
-    assert_true(krn.getArgInfo<CL_KERNEL_ARG_TYPE_NAME>(2) == "pos_t*");
+    assert_equal_print(prg.getInfo<CL_PROGRAM_KERNEL_NAMES>(), "fun;fun2");
+    assert_equal_print(krn.getInfo<CL_KERNEL_NUM_ARGS>(), 3);
+    assert_equal_print(krn.getArgInfo<CL_KERNEL_ARG_NAME>(0), "var1");
+    assert_equal_print(krn.getArgInfo<CL_KERNEL_ARG_TYPE_NAME>(0), "uint*");
+    assert_equal_print(krn.getArgInfo<CL_KERNEL_ARG_NAME>(1), "var2");
+    assert_equal_print(krn.getArgInfo<CL_KERNEL_ARG_TYPE_NAME>(1), "float4*");
+    assert_equal_print(krn.getArgInfo<CL_KERNEL_ARG_NAME>(2), "var3");
+    assert_equal_print(krn.getArgInfo<CL_KERNEL_ARG_TYPE_NAME>(2), "pos_t*");
 }
 
 TEST_CASE_FIXTURE(kernel_test_sum_up, sum_up_program_fixture) {
@@ -116,8 +120,8 @@ TEST_CASE_FIXTURE(kernel_test_sum_up, sum_up_program_fixture) {
         pull(s) <<
         wait_until_done;
 
-    assert_true(r[0] == (500 + 200 + 499 * 500 / 2));
-    assert_true(krn.getInfo<CL_KERNEL_NUM_ARGS>() == 2);
+    assert_equal_print(r[0], (500 + 200 + 499 * 500 / 2));
+    assert_equal_print(krn.getInfo<CL_KERNEL_NUM_ARGS>(), 2);
 }
 
 TEST_CASE_FIXTURE(command_queue_run_lambda, sum_up_program_fixture) {
@@ -184,9 +188,9 @@ TEST_CASE_FIXTURE(kernel_event_listener, sum_up_program_fixture) {
         call([&]() { result[2] = r[0]; }) <<
         wait_until_done;
 
-    assert_true(result[0] == (1500 + 499 * 500 / 2));
-    assert_true(result[1] == (5500 + 499 * 500 / 2));
-    assert_true(result[2] == (50000 + 499 * 500 / 2));
+    assert_equal_print(result[0], (1500 + 499 * 500 / 2));
+    assert_equal_print(result[1], (5500 + 499 * 500 / 2));
+    assert_equal_print(result[2], (50000 + 499 * 500 / 2));
 }
 
 TEST_CASE(pipeline_buf_krn_bindings) {
@@ -221,8 +225,8 @@ TEST_CASE(pipeline_buf_krn_bindings) {
     buffer<cl_float> most_f { 0.0, 1.0 };
 
     pipeline pl;
-    pl.auto_bind_buffer(buf_f);
     pl.bind_kernel_from_program(prg);
+    pl.auto_bind_buffer(buf_f);
     pl.auto_bind_buffer(most_f);
 
     kernel* find_max = pl.get_kernel("find_max");
@@ -242,18 +246,22 @@ TEST_CASE(pipeline_buf_krn_bindings) {
         pull(most_f) <<
         wait_until_done;
 
-    assert_true(most_f[0] == buf_f[39]);
-    assert_true(most_f[1] == buf_f[46]);
+    assert_equal_print(most_f[0], buf_f[39]);
+    assert_equal_print(most_f[1], buf_f[46]);
 }
 
 int main(int argc, char** argv)
 {
     std::vector<platform> ps = platform::get();
+    if(ps.empty()) throw std::runtime_error("No platform found.");
     std::vector<device> ds = device::get(ps);
+    if(ds.empty()) throw std::runtime_error("No device found.");
 
     context ctxt(ds.back());
     context_guard cg(ctxt);
 
+    shrtool::unit_test::test_context::inst()
+        .runners_list.push_back(cl_error_handler);
     shrtool::unit_test::test_main(argc, argv);
 }
 

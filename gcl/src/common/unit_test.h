@@ -80,26 +80,25 @@ class test_context : public generic_singleton<test_context> {
     bool stop_on_failure_ = false;
 
 public:
-    typedef std::function<bool(test_case::test_case_func_type)> runner_type;
+    typedef std::function<bool()> test_func_type;
+    typedef std::function<bool(test_func_type)> runner_type;
 
     std::stringstream ctest;
     std::stringstream full_log;
-    runner_type runner;
+    std::vector<runner_type> runners_list;
 
-    test_context() :
-        runner(default_runner) { }
+    test_context() { }
 
-    static bool default_runner(test_case::test_case_func_type fn) {
-        try {
-            fn();
-            std::cout << "\033[1;32mPassed\033[0m" << std::endl;
-        } catch(assert_error e) {
-            std::cout << "\033[1;33mFailed\033[0m: "
-                << e.what() << std::endl;
-            return false;
+    bool run_test(test_func_type fn) {
+        runner_type cur_r = [](test_func_type f) -> bool { return f(); };
+        for(runner_type r : runners_list) {
+            runner_type prev_r = cur_r;
+            cur_r = [r, prev_r](test_func_type f) -> bool {
+                return r([prev_r, f]() -> bool { return prev_r(f); });
+            };
         }
 
-        return true;
+        return cur_r(fn);
     }
 
     static void stop_on_failure(bool b) { inst().stop_on_failure_ = b; }
@@ -166,12 +165,22 @@ inline bool test_suite::test_all() {
     for(auto& tc : test_cases_) {
         std::cout << "Running " << tc.name << "..." << std::flush;
 
-#ifndef EXPOSE_EXCEPTION
         try {
-#endif
-            state &= test_context::inst().runner(tc.test_case_func);
+            bool res = test_context::inst().run_test([&tc]() {
+                    tc.test_case_func();
+                    return true;
+                });
+            state &= res;
+            if(res)
+                std::cout << "\033[1;32mPassed\033[0m" << std::endl;
+        } catch(assert_error e) {
+            std::cout << "\033[1;33mFailed\033[0m: "
+                << e.what() << std::endl;
+            state &= false;
+        }
+
 #ifndef EXPOSE_EXCEPTION
-        } catch(error_base e) {
+        catch(error_base e) {
             std::cout << "\033[1;31mError\033[0m: " << e.what() << std::endl;
             state &= false;
         } catch(std::exception e) {

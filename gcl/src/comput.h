@@ -404,6 +404,8 @@ struct kernel : cl::Kernel {
             try {
                 for(size_t arg_i = 0; arg_i < args; ++arg_i) {
                     std::string arg_name = getArgInfo<CL_KERNEL_ARG_NAME>(arg_i);
+                    if(!arg_name.empty() && !arg_name.back())
+                        arg_name.resize(arg_name.size() - 1);
                     index_[arg_name] = arg_i;
                 }
             } catch(cl::Error e) {
@@ -508,7 +510,9 @@ struct pipeline {
         for(cl::Kernel& clk : kernels) {
             kernel* k = new kernel(clk());
             kernels_.push_back(k);
-            bind_kernel(k->getInfo<CL_KERNEL_FUNCTION_NAME>(), *k);
+            std::string s = k->getInfo<CL_KERNEL_FUNCTION_NAME>();
+            if(s.size() > 0 && !s.back()) s.resize(s.size() - 1);
+            bind_kernel(s, *k);
         }
     }
 
@@ -540,28 +544,6 @@ private:
 
 #define auto_bind_buffer(buf) bind_buffer(#buf, buf);
 #define auto_bind_kernel(krn) bind_kernel(#krn, krn);
-
-/*
- * Error handler for gcl test utilities
- */
-
-template<typename Base>
-struct comput_error_handler {
-    static bool run_test(const std::function<void()>& f) {
-        try {
-            return Base::run_test(f);
-        } catch(const cl::Error& e) {
-            std::cout << "\033[1;33mCL Error\033[0m: ";
-            std::cout << e.what() << " (" << e.err() << ')' << std::endl;
-            return false;
-        } catch(const comput_error& e) {
-            std::cout << "\033[1;33mComput Error\033[0m: ";
-            std::cout << e.what() << std::endl;
-            return false;
-        }
-    }
-};
-
 
 }
 

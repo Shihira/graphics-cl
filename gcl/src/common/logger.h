@@ -78,13 +78,13 @@ public:
 };
 
 enum internal_log_level : size_t {
-    ALL = 0,
-    DEBUG   = 10000,
-    INFO    = 20000,
-    WARNING = 30000,
-    ERROR   = 40000,
-    FATAL   = 50000,
-    NONE = std::numeric_limits<size_t>::max(), // constexpr Shika Dekinai
+    LOG_ALL = 0,
+    LOG_DEBUG   = 10000,
+    LOG_INFO    = 20000,
+    LOG_WARNING = 30000,
+    LOG_ERROR   = 40000,
+    LOG_FATAL   = 50000,
+    LOG_NONE = std::numeric_limits<size_t>::max(), // constexpr Shika Dekinai
 };
 
 class logger_set {
@@ -116,11 +116,11 @@ public:
     logger_manager(bool leave_empty = false);
 };
 
-#define debug_log   logger_manager::get_by_level(DEBUG).start_logging()
-#define info_log    logger_manager::get_by_level(INFO).start_logging()
-#define warning_log logger_manager::get_by_level(WARNING).start_logging()
-#define error_log   logger_manager::get_by_level(ERROR).start_logging()
-#define fatal_log   logger_manager::get_by_level(FATAL).start_logging()
+#define debug_log   logger_manager::get_by_level(LOG_DEBUG).start_logging()
+#define info_log    logger_manager::get_by_level(LOG_INFO).start_logging()
+#define warning_log logger_manager::get_by_level(LOG_WARNING).start_logging()
+#define error_log   logger_manager::get_by_level(LOG_ERROR).start_logging()
+#define fatal_log   logger_manager::get_by_level(LOG_FATAL).start_logging()
 
 }
 

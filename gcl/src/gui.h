@@ -121,68 +121,104 @@ public:
 
     void run() {
         SDL_Event e;
-
-        int timer = SDL_AddTimer(1000 / fps_, paint_timer_cb_, NULL);
-        uint32_t tick = SDL_GetTicks();
-
-        uint32_t fps_counter = 0;
-        auto last_fc_time = std::chrono::system_clock::now();
+        framerate_controller fc(std::chrono::system_clock::now());
 
         while(true) {
-            int has_event = SDL_WaitEvent(&e);
-            if(!has_event) break;
-
-            if(e.type == SDL_QUIT) {
-                if(_on_exit) _on_exit();
-                break;
-            }
-
-            if(e.type == SDL_MOUSEBUTTONUP) {
-                if(_on_mouse_up) _on_mouse_up(e.button.x, e.button.y,
-                    e.button.button == SDL_BUTTON_LEFT ? left_button :
-                    e.button.button == SDL_BUTTON_RIGHT ? right_button :
-                    e.button.button == SDL_BUTTON_MIDDLE ? middle_button :
-                    none);
-            }
-
-            if(e.type == SDL_MOUSEBUTTONDOWN) {
-                if(_on_mouse_down) _on_mouse_down(e.button.x, e.button.y,
-                    e.button.button == SDL_BUTTON_LEFT ? left_button :
-                    e.button.button == SDL_BUTTON_RIGHT ? right_button :
-                    e.button.button == SDL_BUTTON_MIDDLE ? middle_button :
-                    none);
-            }
-
-            if(e.type == SDL_MOUSEMOTION) {
-                if(_on_mouse_move) _on_mouse_move(e.motion.x, e.motion.y,
-                        e.motion.state);
-            }
-
-            if(e.type == SDL_USEREVENT) {
-                if(e.user.code == SDL_USEREVENT_REPAINT) {
-                    if(_on_paint) {
-                        uint32_t d_tick = (SDL_GetTicks() - tick) / 16;
-                        _on_paint();
-                        tick += d_tick * 16;
-
-                        // FPS counter
-                        fps_counter += 1;
-                        auto dur = std::chrono::system_clock::now() -
-                            last_fc_time;
-                        if(std::chrono::duration_cast<
-                                std::chrono::seconds>(dur).count() >= 1) {
-                            //std::cerr << fps_counter << std::endl;
-                            fps_counter = 0;
-                            last_fc_time = std::chrono::system_clock::now();
-                        }
-
-                    }
+            while(SDL_PollEvent(&e)) {
+                if(e.type == SDL_QUIT) {
+                    if(_on_exit) _on_exit();
+                    return;
                 }
+
+                if(e.type == SDL_MOUSEBUTTONUP) {
+                    if(_on_mouse_up) _on_mouse_up(e.button.x, e.button.y,
+                        e.button.button == SDL_BUTTON_LEFT ? left_button :
+                        e.button.button == SDL_BUTTON_RIGHT ? right_button :
+                        e.button.button == SDL_BUTTON_MIDDLE ? middle_button :
+                        none);
+                }
+
+                if(e.type == SDL_MOUSEBUTTONDOWN) {
+                    if(_on_mouse_down) _on_mouse_down(e.button.x, e.button.y,
+                        e.button.button == SDL_BUTTON_LEFT ? left_button :
+                        e.button.button == SDL_BUTTON_RIGHT ? right_button :
+                        e.button.button == SDL_BUTTON_MIDDLE ? middle_button :
+                        none);
+                }
+
+                if(e.type == SDL_MOUSEMOTION) {
+                    if(_on_mouse_move) _on_mouse_move(e.motion.x, e.motion.y,
+                            e.motion.state);
+                }
+            }
+
+            if(_on_paint)
+                _on_paint();
+
+            fc.input_recent_tick(std::chrono::system_clock::now());
+            double delay = fc.get_sleep_time();
+            if(delay > 0) {
+                SDL_Delay(delay / 1000);
+            }
+
+            std::cerr << fc.get_frame_rate() << std::endl;
+        }
+    }
+
+    struct framerate_controller {
+        std::chrono::system_clock::time_point last_fps_count;
+        std::chrono::system_clock::time_point last_tick;
+
+        bool is_last_timeout = true;
+        double accum = 0;
+        double sleep_time = 0;
+
+        size_t old_frames = 0;
+        size_t frames = 0;
+
+        framerate_controller(std::chrono::system_clock::time_point lt) :
+            last_fps_count(lt), last_tick(lt) { }
+
+        void input_recent_tick(std::chrono::system_clock::time_point ct) {
+            using namespace std::chrono;
+
+            auto dur = ct - last_tick;
+            int cost = duration_cast<microseconds>(dur).count();
+            last_tick = ct;
+
+            frames += 1;
+            if(duration_cast<milliseconds>
+                    (ct - last_fps_count).count() > 1000) {
+                old_frames = frames;
+                frames = 0;
+                last_fps_count = system_clock::now();
+            }
+
+            is_last_timeout = cost > 16666;
+
+            if(accum == 0) {
+                accum = cost;
+                sleep_time = 16666 - cost;
+            } else {
+                accum = (accum * 5 + cost) / 6;
+                std::cerr << "accum: " << accum << std::endl;
+                if(accum > 16666)
+                    sleep_time -= 1000;
+                else
+                    sleep_time += 1000;
             }
         }
 
-        SDL_RemoveTimer(timer);
-    }
+        double get_sleep_time() {
+            if(is_last_timeout)
+                return 0;
+            return sleep_time;
+        }
+
+        size_t get_frame_rate() {
+            return old_frames;
+        }
+    };
 
     static application& instance() {
         return _app;
