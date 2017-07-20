@@ -6,16 +6,6 @@
 
 namespace shrtool {
 
-color* image::lazy_data_() const
-{
-    if(!data_) {
-        if(!width_ || !height_)
-            throw restriction_error("Zero size image");
-        data_ = new color[width_ * height_];
-    }
-    return data_;
-}
-
 void image::copy_pixel(size_t offx, size_t offy, size_t w, size_t h,
         image& dest, size_t dest_x, size_t dest_y) const {
     if(offx + w > width() || offy + h > height() ||
@@ -123,7 +113,7 @@ void image_io_netpbm::load_into_image(std::istream& is, image& im)
 {
     char P = 0; char num = 0;
     is >> P >> num >> std::ws;
-    if(P != 'P' || !std::isdigit(num)) {
+    if(P != 'P' || num < '0' || num > '9') {
         throw unsupported_error("Bad Netpbm image: magic mumber");
     }
 
@@ -137,8 +127,7 @@ void image_io_netpbm::load_into_image(std::istream& is, image& im)
     if(!w || !h || !space || !isspace(whsc))
         throw parse_error("Bad Netpbm image: properties");
 
-    image_geometry_helper__::width(im) = w;
-    image_geometry_helper__::height(im) = h;
+    im.resize(w, h);
 
     if(num == '3')
         load_netpbm_body_plain(is, im, space);

@@ -238,9 +238,9 @@ struct mesh_indexed : mesh_base<mesh_indexed> {
             .function("gen_uv_sphere", gen_uv_sphere)
             .function("gen_box", gen_box)
             .function("gen_plane", gen_plane)
-            .function<mesh_indexed, math::col4&, size_t, size_t>("get_position", &mesh_indexed::get_position)
-            .function<mesh_indexed, math::col3&, size_t, size_t>("get_normals", &mesh_indexed::get_normal)
-            .function<mesh_indexed, math::col3&, size_t, size_t>("get_uv", &mesh_indexed::get_uv);
+            .function("get_position", static_cast<math::col4& (mesh_indexed::*)(size_t, size_t)>(&mesh_indexed::get_position))
+            .function("get_normals", static_cast<math::col3& (mesh_indexed::*)(size_t, size_t)>(&mesh_indexed::get_normal))
+            .function("get_uv", static_cast<math::col3& (mesh_indexed::*) (size_t, size_t)>(&mesh_indexed::get_uv));
     }
 };
 

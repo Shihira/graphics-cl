@@ -17,11 +17,9 @@ class image {
     size_t width_ = 0;
     size_t height_ = 0;
 
-    mutable color* data_ = nullptr;
-    // mark that if data_ should be deleted on destruction
-    bool data_internal_ = true;
-
-    color* lazy_data_() const;
+    std::vector<color> underlying_;
+    std::vector<fcolor> float_cache_;
+    color* data_ = nullptr;
 
 public:
     typedef color* iterator;
@@ -29,19 +27,15 @@ public:
 
     // create an new image
     image(size_t w = 0, size_t h = 0, color* data_ = nullptr) :
-        width_(w), height_(h), data_(data_), data_internal_(!data_) { }
-    image(const image& rhs) : width_(rhs.width_), height_(rhs.height_) {
-        std::copy(rhs.begin(), rhs.end(), begin());
-    }
-    image(image&& rhs) : width_(rhs.width_), height_(rhs.height_) {
-        // we cannot call data() here. just keep the current state.
-        std::swap(data_, rhs.data_);
-        std::swap(data_internal_, rhs.data_internal_);
+            width_(w), height_(h), data_(data_) {
+        if(w && h && data_) resize(w, h);
     }
 
+    image(const image& rhs) { operator=(rhs); }
+    image(image&& rhs) { operator=(rhs); }
+
     image& operator=(const image& rhs) {
-        width_ = rhs.width_;
-        height_ = rhs.height_;
+        resize(rhs.width_, rhs.height_);
         std::copy(rhs.begin(), rhs.end(), begin());
         return *this;
     }
@@ -49,8 +43,14 @@ public:
     image& operator=(image&& rhs) {
         width_ = rhs.width_;
         height_ = rhs.height_;
+        std::swap(underlying_, rhs.underlying_);
         std::swap(data_, rhs.data_);
-        std::swap(data_internal_, rhs.data_internal_);
+
+        if(!underlying_.empty())
+            data_ = underlying_.data();
+        if(!rhs.underlying_.empty())
+            rhs.data_ = rhs.underlying_.data();
+
         return *this;
     }
 
@@ -75,15 +75,39 @@ public:
         return data()[t * width_ + l];
     }
 
-    color* data() { return lazy_data_(); }
-    color const* data() const { return lazy_data_(); }
+    const void quad(size_t l, size_t t,
+            fcolor& c00, fcolor& c10, fcolor& c01, fcolor& c11) const {
+#if _DEBUG
+        GUARD_(!float_cache_.empty());
+#endif
+        l += t * width_;
 
-    ~image() {
-        if(data_ && data_internal_) delete[] data_;
+        c00 = float_cache_[l];
+        c10 = float_cache_[l + 1];
+        c01 = float_cache_[l + width_];
+        c11 = float_cache_[l + width_ + 1];
     }
+
+    void resize(size_t w, size_t h) {
+        width_ = w;
+        height_ = h;
+
+        underlying_.resize(w * h);
+        data_ = underlying_.data();
+    }
+
+    color* data() { return data_; }
+    color const* data() const { return data_; }
+
+    ~image() { }
 
     void copy_pixel(size_t offx, size_t offy, size_t w, size_t h,
             image& dest, size_t dest_x, size_t dest_y) const;
+
+    void make_float_cache() {
+        float_cache_.resize(width_ * height_);
+        std::copy(begin(), end(), float_cache_.begin());
+    }
 
     /* Many cubemap images have layouts as such:
      *    +Y
@@ -103,11 +127,6 @@ public:
             .function("extract_cubemap", load_cubemap_from)
             .function("pixel", static_cast<color&(image::*)(size_t, size_t)>(&image::pixel));
     }
-};
-
-struct image_geometry_helper__ {
-    static size_t& height(image& img) { return img.height_; }
-    static size_t& width(image& img) { return img.width_; }
 };
 
 struct image_io_netpbm {

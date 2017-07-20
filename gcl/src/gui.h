@@ -7,7 +7,11 @@
 #include <chrono>
 #include <iostream>
 
+#define SDL_MAIN_HANDLED
+
 #include <SDL2/SDL.h>
+
+#include "common/singleton.h"
 
 #define SDL_USEREVENT_REPAINT 0
 
@@ -62,7 +66,7 @@ public:
     SDL_Surface* sdl_surface() const { return _surface; }
 };
 
-class application {
+class application : public shrtool::generic_singleton<application> {
 public:
     enum mouse_button {
         none = 0,
@@ -72,30 +76,14 @@ public:
     };
 
 private:
-    application() { }
-    static application _app;
-
     std::function<void(void)> _on_paint;
     std::function<void(void)> _on_exit;
     std::function<void(int, int, mouse_button)> _on_mouse_down;
     std::function<void(int, int, mouse_button)> _on_mouse_up;
     std::function<void(int, int, uint32_t)> _on_mouse_move;
-
-    uint32_t fps_ = 60;
-
-    static uint32_t paint_timer_cb_(uint32_t interval, void* paint_cb) {
-        SDL_Event e;
-        e.type = SDL_USEREVENT;
-        e.user.type = SDL_USEREVENT;
-        e.user.code = SDL_USEREVENT_REPAINT;
-
-        SDL_PushEvent(&e);
-
-        return interval;
-    }
+    std::function<void(int, int)> _on_mouse_wheel;
 
 public:
-
     void register_on_paint(std::function<void(void)> func) {
         _on_paint = func;
     }
@@ -116,28 +104,42 @@ public:
         _on_mouse_move = func;
     }
 
-    void set_fps(uint32_t fps) { fps_ = fps; }
-    uint32_t fps() { return fps_; }
+    void register_on_mouse_wheel(decltype(_on_mouse_wheel) func) {
+        _on_mouse_wheel = func;
+    }
 
     void run() {
         SDL_Event e;
-
-        int timer = SDL_AddTimer(1000 / fps_, paint_timer_cb_, NULL);
-        uint32_t tick = SDL_GetTicks();
 
         uint32_t fps_counter = 0;
         auto last_fc_time = std::chrono::system_clock::now();
 
         while(true) {
-            int has_event = SDL_WaitEvent(&e);
-            if(!has_event) break;
+            int has_event = SDL_PollEvent(&e);
 
-            if(e.type == SDL_QUIT) {
+            if(_on_paint && !has_event) {
+                _on_paint();
+
+                // FPS counter
+                fps_counter += 1;
+                auto dur = std::chrono::system_clock::now() -
+                    last_fc_time;
+                if(std::chrono::duration_cast<
+                        std::chrono::seconds>(dur).count() >= 1) {
+                    std::cout << "FPS: " << fps_counter << std::endl;
+                    fps_counter = 0;
+                    last_fc_time = std::chrono::system_clock::now();
+                }
+
+                continue;
+            }
+
+            if(has_event && e.type == SDL_QUIT) {
                 if(_on_exit) _on_exit();
                 break;
             }
 
-            if(e.type == SDL_MOUSEBUTTONUP) {
+            if(has_event && e.type == SDL_MOUSEBUTTONUP) {
                 if(_on_mouse_up) _on_mouse_up(e.button.x, e.button.y,
                     e.button.button == SDL_BUTTON_LEFT ? left_button :
                     e.button.button == SDL_BUTTON_RIGHT ? right_button :
@@ -145,7 +147,7 @@ public:
                     none);
             }
 
-            if(e.type == SDL_MOUSEBUTTONDOWN) {
+            if(has_event && e.type == SDL_MOUSEBUTTONDOWN) {
                 if(_on_mouse_down) _on_mouse_down(e.button.x, e.button.y,
                     e.button.button == SDL_BUTTON_LEFT ? left_button :
                     e.button.button == SDL_BUTTON_RIGHT ? right_button :
@@ -153,47 +155,18 @@ public:
                     none);
             }
 
-            if(e.type == SDL_MOUSEMOTION) {
+            if(has_event && e.type == SDL_MOUSEMOTION) {
                 if(_on_mouse_move) _on_mouse_move(e.motion.x, e.motion.y,
                         e.motion.state);
             }
 
-            if(e.type == SDL_USEREVENT) {
-                if(e.user.code == SDL_USEREVENT_REPAINT) {
-                    if(_on_paint) {
-                        uint32_t d_tick = (SDL_GetTicks() - tick) / 16;
-                        _on_paint();
-                        tick += d_tick * 16;
-
-                        // FPS counter
-                        fps_counter += 1;
-                        auto dur = std::chrono::system_clock::now() -
-                            last_fc_time;
-                        if(std::chrono::duration_cast<
-                                std::chrono::seconds>(dur).count() >= 1) {
-                            //std::cerr << fps_counter << std::endl;
-                            fps_counter = 0;
-                            last_fc_time = std::chrono::system_clock::now();
-                        }
-
-                    }
-                }
+            if(has_event && e.type == SDL_MOUSEWHEEL) {
+                if(_on_mouse_wheel) _on_mouse_wheel(
+                        e.wheel.x, e.wheel.y);
             }
         }
-
-        SDL_RemoveTimer(timer);
-    }
-
-    static application& instance() {
-        return _app;
     }
 };
-
-application application::_app;
-
-inline application& app() {
-    return application::instance();
-}
 
 }
 

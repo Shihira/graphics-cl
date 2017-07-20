@@ -187,10 +187,31 @@ struct fcolor {
         return res;
     }
 
+    fcolor operator+(const fcolor& c) const {
+        return fcolor(
+            c.r() + r(),
+            c.g() + g(),
+            c.b() + b(),
+            c.a() + a());
+    }
+
+    fcolor operator*(const float f) const {
+        return fcolor(
+            r() * f,
+            g() * f,
+            b() * f,
+            a() * f);
+    }
+
     float r() const { return data.floats[0]; }
     float g() const { return data.floats[1]; }
     float b() const { return data.floats[2]; }
     float a() const { return data.floats[3]; }
+
+    float& r() { return data.floats[0]; }
+    float& g() { return data.floats[1]; }
+    float& b() { return data.floats[2]; }
+    float& a() { return data.floats[3]; }
 
     typedef float* iterator;
     typedef float const* const_iterator;

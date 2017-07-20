@@ -218,7 +218,7 @@ mesh_uv_sphere::mesh_uv_sphere(double radius,
                     stor_positions->at(i_rb) / 4;
                 nml /= math::norm(nml);
                 non_smth_ni = stor_normals->size();
-                stor_normals->push_back(nml.cutdown<col3>());
+                stor_normals->emplace_back(nml);
             }
 
             if(v != 0) { // not north polar

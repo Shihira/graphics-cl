@@ -20,6 +20,11 @@ public:
         const char* error_name() const noexcept override { return #name; } \
     };
 
+#define GUARD_(expr) \
+    if(!(expr)) { \
+        throw restriction_error("Assertion Failure: " #expr); \
+    }
+
 DEFINE_TRIVIAL_ERROR(assert_error)
 DEFINE_TRIVIAL_ERROR(shader_error)
 DEFINE_TRIVIAL_ERROR(driver_error)

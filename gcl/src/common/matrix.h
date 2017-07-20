@@ -388,9 +388,8 @@ struct matrix :
 {
 private:
     typedef std::array<T, M * N> container_type;
-    typedef std::unique_ptr<container_type> __pointer;
-
-    __pointer data_;
+    //typedef std::unique_ptr<container_type> __pointer;
+    container_type data_;
 
 public:
     typedef T value_type;
@@ -406,44 +405,57 @@ public:
     static constexpr size_t cols = N;
     static constexpr bool is_vector = M == 1 || N == 1;
 
-    matrix() : data_(new container_type)
+    matrix() //: data_(new container_type)
         { std::fill(begin(), end(), 0); }
     matrix(const std::initializer_list<T>& l)
-        : data_(new container_type)
+        //: data_(new container_type)
         { std::copy(l.begin(), l.end(), begin()); }
     matrix(const matrix& m)
-        : data_(new container_type)
+        //: data_(new container_type)
         { std::copy(m.begin(), m.end(), begin()); }
     template<typename OtherT>
     matrix(const matrix<OtherT, M, N>& m)
-        : data_(new container_type)
+        //: data_(new container_type)
         { std::copy(m.begin(), m.end(), begin()); }
-    matrix(matrix&& m) : data_(std::move(m.data_)) { }
+    //matrix(matrix&& m) : data_(std::move(m.data_)) { }
+    template<typename OtherT, size_t M_, size_t N_>
+    matrix(const matrix<OtherT, M_, N_>& mat) {
+        T* dst = data();
+        const OtherT* src = mat.data();
+        for(size_t m = 0; m < mpl_min__(M_, M); m++) {
+            for(size_t n = 0; n < mpl_min__(N_, N); n++)
+                dst[n] = src[n];
+            dst += N;
+            src += N_;
+        }
+    }
 
     matrix operator+(const matrix& m) const {
         matrix result;
 
-        auto dst_i = result.begin();
-        auto src1_i = m.begin(), src2_i = begin();
-        for(; dst_i != result.end() && src1_i != m.end() && src2_i != m.end();
-                ++dst_i, ++src1_i, ++src2_i)
-            *dst_i = *src1_i + *src2_i;
+        auto dst = &(*result.begin());
+        auto src1 = &(*m.begin());
+        auto src2 = &(*begin());
+
+        for(int i = 0; i < M * N; i++)
+            dst[i] = src1[i] + src2[i];
 
         return result;
     }
 
-    value_type* data() { return data_->data(); }
-    const value_type* data() const { return data_->data(); }
+    value_type* data() { return data_.data(); }
+    const value_type* data() const { return data_.data(); }
 
     template<typename Numeric> typename std::enable_if<
         std::is_arithmetic<Numeric>::value, matrix>::type
     operator*(Numeric n) const {
         matrix result;
 
-        auto dst_i = result.begin();
-        auto src_i = begin();
-        for(; dst_i != result.end() && src_i != end(); ++dst_i, ++src_i)
-            *dst_i = *src_i * n;
+        auto dst = &*result.begin();
+        auto src = &*begin();
+
+        for(int i = 0; i < M * N; i++)
+            dst[i] = src[i] * n;
 
         return result;
     }
@@ -467,10 +479,11 @@ public:
     operator/(Numeric n) const {
         matrix result;
 
-        auto dst_i = result.begin();
-        auto src_i = begin();
-        for(; dst_i != result.end() && src_i != end(); ++dst_i, ++src_i)
-            *dst_i = *src_i / n;
+        auto dst = &*result.begin();
+        auto src = &*begin();
+
+        for(int i = 0; i < M * N; i++)
+            dst[i] = src[i] / n;
 
         return result;
     }
@@ -478,14 +491,14 @@ public:
     /*
      * row-major order iterator
      */
-    iterator begin() { return data_->begin(); }
-    iterator end() { return data_->end(); }
+    iterator begin() { return data_.begin(); }
+    iterator end() { return data_.end(); }
 
-    const_iterator begin() const { return data_->begin(); }
-    const_iterator end() const { return data_->end(); }
+    const_iterator begin() const { return data_.begin(); }
+    const_iterator end() const { return data_.end(); }
 
-    const_iterator cbegin() const { return data_->cbegin(); }
-    const_iterator cend() const { return data_->cend(); }
+    const_iterator cbegin() const { return data_.cbegin(); }
+    const_iterator cend() const { return data_.cend(); }
 
     matrix& operator=(const matrix& m) {
         std::copy(m.begin(), m.end(), begin());
@@ -556,15 +569,6 @@ public:
             if(res < value_type(0) && res < -bias) return false;
         }
         return true;
-    }
-
-    template<typename Mat>
-    Mat cutdown() const {
-        Mat new_mat;
-        for(size_t m = 0; m < mpl_min__(Mat::rows, rows); m++)
-            for(size_t n = 0; n < mpl_min__(Mat::cols, cols); n++)
-                new_mat.at(m, n) = at(m, n);
-        return new_mat;
     }
 };
 
@@ -667,19 +671,6 @@ typedef row<int32_t, 2> irow2;
 typedef row<int32_t, 1> irow1;
 
 template<typename T, size_t M, size_t N>
-typename std::enable_if<M == 1 || N == 1, double>::type
-norm(const matrix<T, M, N>& m) {
-    double result(0);
-    for(const auto& e : m) result += e * e;
-    return std::sqrt(result);
-}
-
-template<typename IterType, typename VecType>
-double norm(const vector_ref<IterType, VecType>& v) {
-    return std::sqrt(v * v);
-}
-
-template<typename T, size_t M, size_t N>
 matrix<T, N, M> transpose(const matrix<T, M, N>& m_) {
     matrix<T, N, M> new_m;
 
@@ -761,13 +752,28 @@ inverse(const matrix<T, M, M>& m_) {
 
 template<typename T, size_t M, size_t N, size_t P, size_t Q>
 typename std::enable_if<
-    detail::mpl_min__(M, N) == 1 && detail::mpl_min__(P, Q) &&
+    detail::mpl_min__(M, N) == 1 && detail::mpl_min__(P, Q) == 1 &&
     detail::mpl_max__(M, N) == detail::mpl_max__(P, Q), T>::type
 dot(const matrix<T, M, N>& v1, const matrix<T, P, Q>& v2) {
     T sum(0);
-    for(auto i1 = v1.begin(), i2 = v2.begin(); i1 != v1.end(); ++i1, ++i2)
-        sum += (*i1) * (*i2);
+    const T* src1 = v1.data();
+    const T* src2 = v2.data();
+
+    for(size_t i = 0; i < M * N; i++)
+        sum += src1[i] * src2[i];
+
     return sum;
+}
+
+template<typename T, size_t M, size_t N>
+typename std::enable_if<M == 1 || N == 1, double>::type
+norm(const matrix<T, M, N>& m) {
+    return std::sqrt(dot(m, m));
+}
+
+template<typename IterType, typename VecType>
+double norm(const vector_ref<IterType, VecType>& v) {
+    return std::sqrt(v * v);
 }
 
 template<typename T, size_t M, size_t N, size_t P, size_t Q>
@@ -790,6 +796,12 @@ cross(const matrix<T, M, N>& v1, const matrix<T, P, Q>& v2) {
             v2[0], v2[1],
         });
     return res;
+}
+
+template<typename T>
+typename std::enable_if<std::is_scalar<T>::value, T>::type
+clamp(T v, T min_v, T max_v) {
+    return v < min_v ? min_v : v > max_v ? max_v : v;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
